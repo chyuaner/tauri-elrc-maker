@@ -15,7 +15,9 @@
       {
         "title": "tauri-elrc-maker",
         "width": 1368,
-        "height": 768
+        "height": 768,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
       }
     ],
     "security": {
