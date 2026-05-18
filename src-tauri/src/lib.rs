@@ -257,6 +257,54 @@ fn read_file_binary(path: String) -> Result<tauri::ipc::Response, String> {
     Ok(tauri::ipc::Response::new(bytes))
 }
 
+#[tauri::command]
+fn save_lyrics_dialog(window: tauri::WebviewWindow, lyrics_text: String, default_name: String) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::prelude::*;
+        if let Ok(gtk_window) = window.gtk_window() {
+            let file_chooser = gtk::FileChooserDialog::new(
+                Some("儲存歌詞檔案"),
+                Some(&gtk_window),
+                gtk::FileChooserAction::Save,
+            );
+            file_chooser.add_button("取消", gtk::ResponseType::Cancel);
+            file_chooser.add_button("儲存", gtk::ResponseType::Accept);
+            file_chooser.set_do_overwrite_confirmation(true);
+            file_chooser.set_current_name(&default_name);
+            
+            let filter = gtk::FileFilter::new();
+            filter.add_pattern("*.lrc");
+            filter.set_name(Some("LRC 歌詞檔案 (*.lrc)"));
+            file_chooser.add_filter(filter);
+            
+            let response = file_chooser.run();
+            if response == gtk::ResponseType::Accept {
+                if let Some(filename) = file_chooser.filename() {
+                    if let Ok(mut file) = std::fs::File::create(&filename) {
+                        use std::io::Write;
+                        let _ = file.write_all(lyrics_text.as_bytes());
+                        file_chooser.close();
+                        return Ok(());
+                    } else {
+                        file_chooser.close();
+                        return Err("無法建立並寫入檔案".to_string());
+                    }
+                }
+            }
+            file_chooser.close();
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = window;
+        let _ = lyrics_text;
+        let _ = default_name;
+        Ok(())
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn setup_linux_titlebar(app: &mut tauri::App) {
     use tauri::Manager;
@@ -499,7 +547,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(GStreamerFixPlugin)
-        .invoke_handler(tauri::generate_handler![greet, read_file_binary])
+        .invoke_handler(tauri::generate_handler![greet, read_file_binary, save_lyrics_dialog])
         .setup(|app| {
             #[cfg(target_os = "linux")]
             {
