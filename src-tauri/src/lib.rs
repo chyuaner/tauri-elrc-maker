@@ -271,8 +271,9 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             header_bar.set_show_close_button(true);
             header_bar.set_title(Some("LRC Maker Enhanced"));
 
-            // 1. Media Actions Box
-            let media_box = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+            // 1. Media Actions (Linked Box)
+            let media_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            media_box.style_context().add_class("linked");
             
             let load_media_btn = gtk::Button::with_label("載入媒體");
             let webview_clone = webview_window.clone();
@@ -281,12 +282,19 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             });
             media_box.pack_start(&load_media_btn, false, false, 0);
 
-            let clear_media_btn = gtk::Button::with_label("清除媒體");
+            // Create media dropdown menu
+            let media_menu = gtk::Menu::new();
+            let clear_media_item = gtk::MenuItem::with_label("清除媒體");
             let webview_clone = webview_window.clone();
-            clear_media_btn.connect_clicked(move |_| {
+            clear_media_item.connect_activate(move |_| {
                 let _ = webview_clone.eval("window.AppCommands && window.AppCommands.clearMedia && window.AppCommands.clearMedia()");
             });
-            media_box.pack_start(&clear_media_btn, false, false, 0);
+            media_menu.append(&clear_media_item);
+            media_menu.show_all();
+
+            let media_dropdown = gtk::MenuButton::new();
+            media_dropdown.set_popup(Some(&media_menu));
+            media_box.pack_start(&media_dropdown, false, false, 0);
 
             header_bar.pack_start(&media_box);
 
@@ -294,8 +302,9 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             let sep1 = gtk::Separator::new(gtk::Orientation::Vertical);
             header_bar.pack_start(&sep1);
 
-            // 2. Lyrics Actions Box
-            let lyrics_box = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+            // 2. Lyrics Actions (Linked Box)
+            let lyrics_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            lyrics_box.style_context().add_class("linked");
 
             let load_lyrics_btn = gtk::Button::with_label("載入歌詞");
             let webview_clone = webview_window.clone();
@@ -304,19 +313,27 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             });
             lyrics_box.pack_start(&load_lyrics_btn, false, false, 0);
 
-            let load_embedded_btn = gtk::Button::with_label("載入內嵌");
+            // Create lyrics dropdown menu
+            let lyrics_menu = gtk::Menu::new();
+            
+            let load_embedded_item = gtk::MenuItem::with_label("載入內嵌");
             let webview_clone = webview_window.clone();
-            load_embedded_btn.connect_clicked(move |_| {
+            load_embedded_item.connect_activate(move |_| {
                 let _ = webview_clone.eval("window.AppCommands && window.AppCommands.loadEmbeddedLyrics && window.AppCommands.loadEmbeddedLyrics()");
             });
-            lyrics_box.pack_start(&load_embedded_btn, false, false, 0);
+            lyrics_menu.append(&load_embedded_item);
 
-            let clear_lyrics_btn = gtk::Button::with_label("清除歌詞");
+            let clear_lyrics_item = gtk::MenuItem::with_label("清除歌詞");
             let webview_clone = webview_window.clone();
-            clear_lyrics_btn.connect_clicked(move |_| {
+            clear_lyrics_item.connect_activate(move |_| {
                 let _ = webview_clone.eval("window.AppCommands && window.AppCommands.clearLyrics && window.AppCommands.clearLyrics()");
             });
-            lyrics_box.pack_start(&clear_lyrics_btn, false, false, 0);
+            lyrics_menu.append(&clear_lyrics_item);
+            lyrics_menu.show_all();
+
+            let lyrics_dropdown = gtk::MenuButton::new();
+            lyrics_dropdown.set_popup(Some(&lyrics_menu));
+            lyrics_box.pack_start(&lyrics_dropdown, false, false, 0);
 
             header_bar.pack_start(&lyrics_box);
 
@@ -324,17 +341,18 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             let sep2 = gtk::Separator::new(gtk::Orientation::Vertical);
             header_bar.pack_start(&sep2);
 
-            // 3. Undo/Redo Box
-            let history_box = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+            // 3. Undo/Redo Box (Linked Box)
+            let history_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            history_box.style_context().add_class("linked");
 
-            let undo_btn = gtk::Button::with_label("復原");
+            let undo_btn = gtk::Button::from_icon_name(Some("edit-undo-symbolic"), gtk::IconSize::Button);
             let webview_clone = webview_window.clone();
             undo_btn.connect_clicked(move |_| {
                 let _ = webview_clone.eval("window.AppCommands && window.AppCommands.undo && window.AppCommands.undo()");
             });
             history_box.pack_start(&undo_btn, false, false, 0);
 
-            let redo_btn = gtk::Button::with_label("重做");
+            let redo_btn = gtk::Button::from_icon_name(Some("edit-redo-symbolic"), gtk::IconSize::Button);
             let webview_clone = webview_window.clone();
             redo_btn.connect_clicked(move |_| {
                 let _ = webview_clone.eval("window.AppCommands && window.AppCommands.redo && window.AppCommands.redo()");
@@ -343,22 +361,38 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
 
             header_bar.pack_start(&history_box);
 
-            // 4. Export Actions Box (Right side)
-            let export_box = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+            // 4. Export Actions (Linked Box on Right side)
+            let export_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            export_box.style_context().add_class("linked");
 
-            let export_standard_btn = gtk::Button::with_label("標準匯出");
+            let export_btn = gtk::Button::with_label("匯出 .lrc");
             let webview_clone = webview_window.clone();
-            export_standard_btn.connect_clicked(move |_| {
+            export_btn.connect_clicked(move |_| {
                 let _ = webview_clone.eval("window.AppCommands && window.AppCommands.exportStandard && window.AppCommands.exportStandard()");
             });
-            export_box.pack_start(&export_standard_btn, false, false, 0);
+            export_box.pack_start(&export_btn, false, false, 0);
 
-            let export_enhanced_btn = gtk::Button::with_label("加強匯出");
+            // Create export dropdown menu
+            let export_menu = gtk::Menu::new();
+
+            let export_standard_item = gtk::MenuItem::with_label("標準匯出");
             let webview_clone = webview_window.clone();
-            export_enhanced_btn.connect_clicked(move |_| {
+            export_standard_item.connect_activate(move |_| {
+                let _ = webview_clone.eval("window.AppCommands && window.AppCommands.exportStandard && window.AppCommands.exportStandard()");
+            });
+            export_menu.append(&export_standard_item);
+
+            let export_enhanced_item = gtk::MenuItem::with_label("加強匯出");
+            let webview_clone = webview_window.clone();
+            export_enhanced_item.connect_activate(move |_| {
                 let _ = webview_clone.eval("window.AppCommands && window.AppCommands.exportEnhanced && window.AppCommands.exportEnhanced()");
             });
-            export_box.pack_start(&export_enhanced_btn, false, false, 0);
+            export_menu.append(&export_enhanced_item);
+            export_menu.show_all();
+
+            let export_dropdown = gtk::MenuButton::new();
+            export_dropdown.set_popup(Some(&export_menu));
+            export_box.pack_start(&export_dropdown, false, false, 0);
 
             header_bar.pack_end(&export_box);
 
@@ -366,7 +400,7 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             let sep3 = gtk::Separator::new(gtk::Orientation::Vertical);
             header_bar.pack_end(&sep3);
 
-            // 5. Offset Box (Right side)
+            // 5. Offset Box (Flat button on Right side)
             let offset_box = gtk::Box::new(gtk::Orientation::Horizontal, 4);
 
             let offset_btn = gtk::Button::with_label("時間偏移");
@@ -381,7 +415,7 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             // Set the new HeaderBar as the titlebar of the GTK window
             gtk_window.set_titlebar(Some(&header_bar));
             header_bar.show_all();
-            println!("Successfully configured custom Linux GTK3 HeaderBar!");
+            println!("Successfully configured custom Linux GTK3 HeaderBar with linked button groups!");
         }
     }
 }
