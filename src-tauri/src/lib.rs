@@ -257,6 +257,135 @@ fn read_file_binary(path: String) -> Result<tauri::ipc::Response, String> {
     Ok(tauri::ipc::Response::new(bytes))
 }
 
+#[cfg(target_os = "linux")]
+fn setup_linux_titlebar(app: &mut tauri::App) {
+    use tauri::Manager;
+    use gtk::prelude::*;
+
+    if let Some(window) = app.get_webview_window("main") {
+        if let Ok(gtk_window) = window.gtk_window() {
+            let webview_window = window.clone();
+            
+            // Create custom HeaderBar
+            let header_bar = gtk::HeaderBar::new();
+            header_bar.set_show_close_button(true);
+            header_bar.set_title(Some("LRC Maker Enhanced"));
+
+            // 1. Media Actions Box
+            let media_box = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+            
+            let load_media_btn = gtk::Button::with_label("載入媒體");
+            let webview_clone = webview_window.clone();
+            load_media_btn.connect_clicked(move |_| {
+                let _ = webview_clone.eval("window.AppCommands && window.AppCommands.loadMedia && window.AppCommands.loadMedia()");
+            });
+            media_box.pack_start(&load_media_btn, false, false, 0);
+
+            let clear_media_btn = gtk::Button::with_label("清除媒體");
+            let webview_clone = webview_window.clone();
+            clear_media_btn.connect_clicked(move |_| {
+                let _ = webview_clone.eval("window.AppCommands && window.AppCommands.clearMedia && window.AppCommands.clearMedia()");
+            });
+            media_box.pack_start(&clear_media_btn, false, false, 0);
+
+            header_bar.pack_start(&media_box);
+
+            // Separator 1
+            let sep1 = gtk::Separator::new(gtk::Orientation::Vertical);
+            header_bar.pack_start(&sep1);
+
+            // 2. Lyrics Actions Box
+            let lyrics_box = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+
+            let load_lyrics_btn = gtk::Button::with_label("載入歌詞");
+            let webview_clone = webview_window.clone();
+            load_lyrics_btn.connect_clicked(move |_| {
+                let _ = webview_clone.eval("window.AppCommands && window.AppCommands.loadLyrics && window.AppCommands.loadLyrics()");
+            });
+            lyrics_box.pack_start(&load_lyrics_btn, false, false, 0);
+
+            let load_embedded_btn = gtk::Button::with_label("載入內嵌");
+            let webview_clone = webview_window.clone();
+            load_embedded_btn.connect_clicked(move |_| {
+                let _ = webview_clone.eval("window.AppCommands && window.AppCommands.loadEmbeddedLyrics && window.AppCommands.loadEmbeddedLyrics()");
+            });
+            lyrics_box.pack_start(&load_embedded_btn, false, false, 0);
+
+            let clear_lyrics_btn = gtk::Button::with_label("清除歌詞");
+            let webview_clone = webview_window.clone();
+            clear_lyrics_btn.connect_clicked(move |_| {
+                let _ = webview_clone.eval("window.AppCommands && window.AppCommands.clearLyrics && window.AppCommands.clearLyrics()");
+            });
+            lyrics_box.pack_start(&clear_lyrics_btn, false, false, 0);
+
+            header_bar.pack_start(&lyrics_box);
+
+            // Separator 2
+            let sep2 = gtk::Separator::new(gtk::Orientation::Vertical);
+            header_bar.pack_start(&sep2);
+
+            // 3. Undo/Redo Box
+            let history_box = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+
+            let undo_btn = gtk::Button::with_label("復原");
+            let webview_clone = webview_window.clone();
+            undo_btn.connect_clicked(move |_| {
+                let _ = webview_clone.eval("window.AppCommands && window.AppCommands.undo && window.AppCommands.undo()");
+            });
+            history_box.pack_start(&undo_btn, false, false, 0);
+
+            let redo_btn = gtk::Button::with_label("重做");
+            let webview_clone = webview_window.clone();
+            redo_btn.connect_clicked(move |_| {
+                let _ = webview_clone.eval("window.AppCommands && window.AppCommands.redo && window.AppCommands.redo()");
+            });
+            history_box.pack_start(&redo_btn, false, false, 0);
+
+            header_bar.pack_start(&history_box);
+
+            // 4. Export Actions Box (Right side)
+            let export_box = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+
+            let export_standard_btn = gtk::Button::with_label("標準匯出");
+            let webview_clone = webview_window.clone();
+            export_standard_btn.connect_clicked(move |_| {
+                let _ = webview_clone.eval("window.AppCommands && window.AppCommands.exportStandard && window.AppCommands.exportStandard()");
+            });
+            export_box.pack_start(&export_standard_btn, false, false, 0);
+
+            let export_enhanced_btn = gtk::Button::with_label("加強匯出");
+            let webview_clone = webview_window.clone();
+            export_enhanced_btn.connect_clicked(move |_| {
+                let _ = webview_clone.eval("window.AppCommands && window.AppCommands.exportEnhanced && window.AppCommands.exportEnhanced()");
+            });
+            export_box.pack_start(&export_enhanced_btn, false, false, 0);
+
+            header_bar.pack_end(&export_box);
+
+            // Separator 3 (Right side)
+            let sep3 = gtk::Separator::new(gtk::Orientation::Vertical);
+            header_bar.pack_end(&sep3);
+
+            // 5. Offset Box (Right side)
+            let offset_box = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+
+            let offset_btn = gtk::Button::with_label("時間偏移");
+            let webview_clone = webview_window.clone();
+            offset_btn.connect_clicked(move |_| {
+                let _ = webview_clone.eval("window.AppCommands && window.AppCommands.shiftTime && window.AppCommands.shiftTime()");
+            });
+            offset_box.pack_start(&offset_btn, false, false, 0);
+
+            header_bar.pack_end(&offset_box);
+
+            // Set the new HeaderBar as the titlebar of the GTK window
+            gtk_window.set_titlebar(Some(&header_bar));
+            header_bar.show_all();
+            println!("Successfully configured custom Linux GTK3 HeaderBar!");
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Start local media sync HTTP server
@@ -269,65 +398,7 @@ pub fn run() {
         .setup(|app| {
             #[cfg(target_os = "linux")]
             {
-                use tauri::Manager;
-                use tauri::Emitter;
-                use gtk::prelude::*;
-
-                if let Some(window) = app.get_webview_window("main") {
-                    if let Ok(gtk_window) = window.gtk_window() {
-                        let app_handle = app.handle().clone();
-                        
-                        // We will try to add a button to the existing headerbar
-                        if let Some(titlebar) = gtk_window.titlebar() {
-                            if let Ok(header_bar) = titlebar.downcast::<gtk::HeaderBar>() {
-                                let test_button = gtk::Button::with_label("測試按鈕");
-                                let app_handle_clone = app_handle.clone();
-                                test_button.connect_clicked(move |_| {
-                                    println!("Native GTK3 button clicked in existing HeaderBar!");
-                                    let _ = app_handle_clone.emit("native-button-clicked", "Hello from GTK3 Titlebar!");
-                                });
-                                header_bar.pack_start(&test_button);
-                                test_button.show();
-                                println!("Successfully added button to existing GTK3 HeaderBar!");
-                            } else {
-                                println!("Titlebar widget is not a HeaderBar, creating our own.");
-                                // Fallback: Create our own
-                                let header_bar = gtk::HeaderBar::new();
-                                header_bar.set_show_close_button(true);
-                                header_bar.set_title(Some("tauri-elrc-maker"));
-
-                                let test_button = gtk::Button::with_label("測試按鈕");
-                                let app_handle_clone = app_handle.clone();
-                                test_button.connect_clicked(move |_| {
-                                    println!("Native GTK3 button clicked in new HeaderBar!");
-                                    let _ = app_handle_clone.emit("native-button-clicked", "Hello from GTK3 Titlebar!");
-                                });
-                                header_bar.pack_start(&test_button);
-                                
-                                gtk_window.set_titlebar(Some(&header_bar));
-                                header_bar.show_all();
-                                println!("Successfully created and set new GTK3 HeaderBar with button!");
-                            }
-                        } else {
-                            // If there's no existing titlebar (or it returns None), we create a new one!
-                            let header_bar = gtk::HeaderBar::new();
-                            header_bar.set_show_close_button(true);
-                            header_bar.set_title(Some("tauri-elrc-maker"));
-
-                            let test_button = gtk::Button::with_label("測試按鈕");
-                            let app_handle_clone = app_handle.clone();
-                            test_button.connect_clicked(move |_| {
-                                println!("Native GTK3 button clicked in new HeaderBar!");
-                                let _ = app_handle_clone.emit("native-button-clicked", "Hello from GTK3 Titlebar!");
-                            });
-                            header_bar.pack_start(&test_button);
-                            
-                            gtk_window.set_titlebar(Some(&header_bar));
-                            header_bar.show_all();
-                            println!("Successfully created and set new GTK3 HeaderBar with button!");
-                        }
-                    }
-                }
+                setup_linux_titlebar(app);
             }
             Ok(())
         })
