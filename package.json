@@ -4,9 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview",
+    "dev": "npm --prefix aistudio-elrc-maker run dev",
+    "build": "node scripts/build-frontend.cjs",
     "tauri": "tauri"
   },
   "dependencies": {
