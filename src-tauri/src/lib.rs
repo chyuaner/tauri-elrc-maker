@@ -269,7 +269,59 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             // Create custom HeaderBar
             let header_bar = gtk::HeaderBar::new();
             header_bar.set_show_close_button(true);
-            header_bar.set_title(Some("LRC Maker Enhanced"));
+
+            // Create a custom two-line title widget inside a GtkEventBox
+            let title_box = gtk::EventBox::new();
+            title_box.set_visible_window(false); // Transparent background
+            title_box.set_hexpand(true); // Fill all empty horizontal space
+            title_box.set_vexpand(true); // Fill 100% height of the HeaderBar
+            title_box.set_valign(gtk::Align::Fill);
+            title_box.set_margin_top(0);
+            title_box.set_margin_bottom(0);
+            
+            // Vertical box to stack Title and Subtitle
+            let vbox = gtk::Box::new(gtk::Orientation::Vertical, 2);
+            vbox.set_valign(gtk::Align::Center); // Centered vertically
+            vbox.set_halign(gtk::Align::Center); // Centered horizontally
+            
+            let title_label = gtk::Label::new(Some("LRC Maker Enhanced"));
+            title_label.style_context().add_class("title");
+            
+            let subtitle_label = gtk::Label::new(Some("音訊: (無) | 歌詞: (無)"));
+            
+            // Apply custom premium CSS styles to remove margins and style text beautifully
+            let css_provider = gtk::CssProvider::new();
+            let _ = css_provider.load_from_data(
+                b"
+                headerbar {
+                    min-height: 0px;
+                    padding-top: 0px;
+                    padding-bottom: 0px;
+                    margin-top: 0px;
+                    margin-bottom: 0px;
+                }
+                .custom-title-label {
+                    font-weight: bold;
+                    font-size: 13px;
+                }
+                .custom-subtitle-label {
+                    font-size: 10px;
+                    opacity: 0.65;
+                }
+                "
+            );
+            header_bar.style_context().add_provider(&css_provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+            
+            title_label.style_context().add_class("custom-title-label");
+            subtitle_label.style_context().add_class("custom-subtitle-label");
+            title_label.style_context().add_provider(&css_provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+            subtitle_label.style_context().add_provider(&css_provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+            
+            vbox.pack_start(&title_label, false, false, 0);
+            vbox.pack_start(&subtitle_label, false, false, 0);
+            
+            title_box.add(&vbox);
+            header_bar.set_custom_title(Some(&title_box));
 
             // 1. Media Actions (Linked Box)
             let media_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -412,10 +464,29 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
 
             header_bar.pack_end(&offset_box);
 
+            // Enable native window dragging & double-click to maximize on the entire title/subtitle area
+            let gtk_window_clone = gtk_window.clone();
+            let webview_clone = webview_window.clone();
+            title_box.connect_button_press_event(move |_, event| {
+                if event.button() == 1 { // Left click
+                    if event.event_type() == gtk::gdk::EventType::DoubleButtonPress {
+                        if gtk_window_clone.is_maximized() {
+                            gtk_window_clone.unmaximize();
+                        } else {
+                            gtk_window_clone.maximize();
+                        }
+                        return gtk::glib::Propagation::Stop;
+                    }
+                    
+                    let _ = webview_clone.start_dragging();
+                }
+                gtk::glib::Propagation::Proceed
+            });
+
             // Set the new HeaderBar as the titlebar of the GTK window
             gtk_window.set_titlebar(Some(&header_bar));
             header_bar.show_all();
-            println!("Successfully configured custom Linux GTK3 HeaderBar with linked button groups!");
+            println!("Successfully configured custom Linux GTK3 HeaderBar with two-line title and drag support!");
         }
     }
 }
