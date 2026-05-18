@@ -376,6 +376,14 @@ struct TitlebarWidgets {
     load_embedded_item: gtk::MenuItem,
     export_btn: gtk::Button,
     export_dropdown: gtk::MenuButton,
+
+    // Undo/Redo buttons and their dropdown menus
+    undo_btn: gtk::Button,
+    redo_btn: gtk::Button,
+    undo_dropdown: gtk::MenuButton,
+    redo_dropdown: gtk::MenuButton,
+    undo_menu: gtk::Menu,
+    redo_menu: gtk::Menu,
 }
 
 #[cfg(target_os = "linux")]
@@ -451,6 +459,81 @@ fn on_app_state_changed(
         let _ = can_clear_media;
         let _ = can_clear_lyrics;
         let _ = can_load_embedded_lyrics;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn on_history_changed(
+    window: tauri::WebviewWindow,
+    can_undo: bool,
+    can_redo: bool,
+    undo_list: Vec<String>,
+    redo_list: Vec<String>,
+) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::prelude::*;
+        let _ = gtk::glib::idle_add_local(move || {
+            TITLEBAR_WIDGETS.with(|widgets| {
+                if let Some(w) = widgets.borrow().as_ref() {
+                    // Update undo button & dropdown sensitivity
+                    w.undo_btn.set_sensitive(can_undo);
+                    w.undo_dropdown.set_sensitive(can_undo);
+
+                    // Rebuild undo menu items
+                    for child in w.undo_menu.children() {
+                        w.undo_menu.remove(&child);
+                    }
+                    let webview = window.clone();
+                    for (i, label) in undo_list.iter().enumerate() {
+                        let steps = i + 1;
+                        let item = gtk::MenuItem::with_label(&format!("復原到: {}", label));
+                        let wv = webview.clone();
+                        item.connect_activate(move |_| {
+                            let _ = wv.eval(&format!(
+                                "window.AppCommands && window.AppCommands.undoToSequence && window.AppCommands.undoToSequence({})",
+                                steps
+                            ));
+                        });
+                        w.undo_menu.append(&item);
+                    }
+                    w.undo_menu.show_all();
+
+                    // Update redo button & dropdown sensitivity
+                    w.redo_btn.set_sensitive(can_redo);
+                    w.redo_dropdown.set_sensitive(can_redo);
+
+                    // Rebuild redo menu items
+                    for child in w.redo_menu.children() {
+                        w.redo_menu.remove(&child);
+                    }
+                    let webview = window.clone();
+                    for (i, label) in redo_list.iter().enumerate() {
+                        let steps = i + 1;
+                        let item = gtk::MenuItem::with_label(&format!("重複到: {}", label));
+                        let wv = webview.clone();
+                        item.connect_activate(move |_| {
+                            let _ = wv.eval(&format!(
+                                "window.AppCommands && window.AppCommands.redoToSequence && window.AppCommands.redoToSequence({})",
+                                steps
+                            ));
+                        });
+                        w.redo_menu.append(&item);
+                    }
+                    w.redo_menu.show_all();
+                }
+            });
+            gtk::glib::ControlFlow::Break
+        });
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = window;
+        let _ = can_undo;
+        let _ = can_redo;
+        let _ = undo_list;
+        let _ = redo_list;
     }
     Ok(())
 }
@@ -596,19 +679,41 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             let history_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
             history_box.style_context().add_class("linked");
 
+            // Undo button
             let undo_btn = gtk::Button::from_icon_name(Some("edit-undo-symbolic"), gtk::IconSize::Button);
+            undo_btn.set_tooltip_text(Some("復原"));
+            undo_btn.set_sensitive(false);
             let webview_clone = webview_window.clone();
             undo_btn.connect_clicked(move |_| {
                 let _ = webview_clone.eval("window.AppCommands && window.AppCommands.undo && window.AppCommands.undo()");
             });
             history_box.pack_start(&undo_btn, false, false, 0);
 
+            // Undo dropdown menu
+            let undo_menu = gtk::Menu::new();
+            let undo_dropdown = gtk::MenuButton::new();
+            undo_dropdown.set_popup(Some(&undo_menu));
+            undo_dropdown.set_sensitive(false);
+            undo_dropdown.set_tooltip_text(Some("復原歷史記錄"));
+            history_box.pack_start(&undo_dropdown, false, false, 0);
+
+            // Redo button
             let redo_btn = gtk::Button::from_icon_name(Some("edit-redo-symbolic"), gtk::IconSize::Button);
+            redo_btn.set_tooltip_text(Some("重複"));
+            redo_btn.set_sensitive(false);
             let webview_clone = webview_window.clone();
             redo_btn.connect_clicked(move |_| {
                 let _ = webview_clone.eval("window.AppCommands && window.AppCommands.redo && window.AppCommands.redo()");
             });
             history_box.pack_start(&redo_btn, false, false, 0);
+
+            // Redo dropdown menu
+            let redo_menu = gtk::Menu::new();
+            let redo_dropdown = gtk::MenuButton::new();
+            redo_dropdown.set_popup(Some(&redo_menu));
+            redo_dropdown.set_sensitive(false);
+            redo_dropdown.set_tooltip_text(Some("重複歷史記錄"));
+            history_box.pack_start(&redo_dropdown, false, false, 0);
 
             header_bar.pack_start(&history_box);
 
@@ -695,6 +800,12 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
                     load_embedded_item,
                     export_btn,
                     export_dropdown,
+                    undo_btn,
+                    redo_btn,
+                    undo_dropdown,
+                    redo_dropdown,
+                    undo_menu,
+                    redo_menu,
                 });
             });
 
@@ -717,7 +828,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(GStreamerFixPlugin)
-        .invoke_handler(tauri::generate_handler![greet, read_file_binary, save_lyrics_dialog, show_titlebar_buttons, on_app_state_changed])
+        .invoke_handler(tauri::generate_handler![greet, read_file_binary, save_lyrics_dialog, show_titlebar_buttons, on_app_state_changed, on_history_changed])
         .setup(|app| {
             #[cfg(target_os = "linux")]
             {
