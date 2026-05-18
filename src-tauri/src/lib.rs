@@ -306,6 +306,49 @@ fn save_lyrics_dialog(window: tauri::WebviewWindow, lyrics_text: String, default
 }
 
 #[cfg(target_os = "linux")]
+struct TitlebarWidgets {
+    media_box: gtk::Box,
+    sep1: gtk::Separator,
+    lyrics_box: gtk::Box,
+    sep2: gtk::Separator,
+    history_box: gtk::Box,
+    export_box: gtk::Box,
+    sep3: gtk::Separator,
+    offset_box: gtk::Box,
+    subtitle_label: gtk::Label,
+}
+
+#[cfg(target_os = "linux")]
+thread_local! {
+    static TITLEBAR_WIDGETS: std::cell::RefCell<Option<TitlebarWidgets>> = std::cell::RefCell::new(None);
+}
+
+#[tauri::command]
+fn show_titlebar_buttons() -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::prelude::*;
+        let _ = gtk::glib::idle_add_local(move || {
+            TITLEBAR_WIDGETS.with(|widgets| {
+                if let Some(w) = widgets.borrow().as_ref() {
+                    w.media_box.show_all();
+                    w.sep1.show();
+                    w.lyrics_box.show_all();
+                    w.sep2.show();
+                    w.history_box.show_all();
+                    w.export_box.show_all();
+                    w.sep3.show();
+                    w.offset_box.show_all();
+                    w.subtitle_label.show();
+                }
+            });
+            gtk::glib::ControlFlow::Break
+        });
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
 fn setup_linux_titlebar(app: &mut tauri::App) {
     use tauri::Manager;
     use gtk::prelude::*;
@@ -336,6 +379,7 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             title_label.style_context().add_class("title");
             
             let subtitle_label = gtk::Label::new(Some("音訊: (無) | 歌詞: (無)"));
+            subtitle_label.set_visible(false);
             
             // Apply custom premium CSS styles to remove margins and style text beautifully
             let css_provider = gtk::CssProvider::new();
@@ -531,10 +575,38 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
                 gtk::glib::Propagation::Proceed
             });
 
+            // Set initial visibility of all buttons to false
+            media_box.set_visible(false);
+            sep1.set_visible(false);
+            lyrics_box.set_visible(false);
+            sep2.set_visible(false);
+            history_box.set_visible(false);
+            export_box.set_visible(false);
+            sep3.set_visible(false);
+            offset_box.set_visible(false);
+
+            // Store widgets in thread-local for show_titlebar_buttons command
+            TITLEBAR_WIDGETS.with(|widgets| {
+                *widgets.borrow_mut() = Some(TitlebarWidgets {
+                    media_box,
+                    sep1,
+                    lyrics_box,
+                    sep2,
+                    history_box,
+                    export_box,
+                    sep3,
+                    offset_box,
+                    subtitle_label,
+                });
+            });
+
             // Set the new HeaderBar as the titlebar of the GTK window
             gtk_window.set_titlebar(Some(&header_bar));
-            header_bar.show_all();
-            println!("Successfully configured custom Linux GTK3 HeaderBar with two-line title and drag support!");
+            
+            // Show only the header_bar container and the custom title_box, keeping all button widgets hidden
+            header_bar.show();
+            title_box.show_all();
+            println!("Successfully configured custom Linux GTK3 HeaderBar (initially hidden buttons) with drag support!");
         }
     }
 }
@@ -547,7 +619,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(GStreamerFixPlugin)
-        .invoke_handler(tauri::generate_handler![greet, read_file_binary, save_lyrics_dialog])
+        .invoke_handler(tauri::generate_handler![greet, read_file_binary, save_lyrics_dialog, show_titlebar_buttons])
         .setup(|app| {
             #[cfg(target_os = "linux")]
             {
