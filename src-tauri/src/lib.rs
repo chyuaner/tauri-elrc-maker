@@ -416,6 +416,28 @@ fn show_titlebar_buttons() -> Result<(), String> {
 }
 
 #[tauri::command]
+fn set_titlebar_buttons_enabled(enabled: bool) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::prelude::*;
+        let _ = gtk::glib::idle_add_local(move || {
+            TITLEBAR_WIDGETS.with(|widgets| {
+                if let Some(w) = widgets.borrow().as_ref() {
+                    // Set sensitivity on each interactive group as a whole.
+                    // GTK propagates set_sensitive to all children automatically.
+                    w.media_box.set_sensitive(enabled);
+                    w.lyrics_box.set_sensitive(enabled);
+                    w.history_box.set_sensitive(enabled);
+                    w.export_box.set_sensitive(enabled);
+                }
+            });
+            gtk::glib::ControlFlow::Break
+        });
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn on_app_state_changed(
     audio_file_name: Option<String>,
     lyric_file_name: Option<String>,
@@ -828,7 +850,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(GStreamerFixPlugin)
-        .invoke_handler(tauri::generate_handler![greet, read_file_binary, save_lyrics_dialog, show_titlebar_buttons, on_app_state_changed, on_history_changed])
+        .invoke_handler(tauri::generate_handler![greet, read_file_binary, save_lyrics_dialog, show_titlebar_buttons, set_titlebar_buttons_enabled, on_app_state_changed, on_history_changed])
         .setup(|app| {
             #[cfg(target_os = "linux")]
             {
