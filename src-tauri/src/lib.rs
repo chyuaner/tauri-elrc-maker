@@ -164,14 +164,22 @@ pub fn start_http_server() {
                                     let clean_range = &range_str["bytes=".len()..];
                                     let parts: Vec<&str> = clean_range.split('-').collect();
                                     if parts.len() >= 2 {
-                                        if let Ok(start) = parts[0].parse::<usize>() {
-                                            range_start = start;
-                                            has_range = true;
-                                        }
-                                        if !parts[1].is_empty() {
-                                            if let Ok(end) = parts[1].parse::<usize>() {
-                                                range_end = end;
+                                        if parts[0].is_empty() && !parts[1].is_empty() {
+                                            if let Ok(suffix_len) = parts[1].parse::<usize>() {
+                                                range_start = file_len.saturating_sub(suffix_len);
+                                                range_end = file_len - 1;
                                                 has_range = true;
+                                            }
+                                        } else {
+                                            if let Ok(start) = parts[0].parse::<usize>() {
+                                                range_start = start;
+                                                has_range = true;
+                                            }
+                                            if !parts[1].is_empty() {
+                                                if let Ok(end) = parts[1].parse::<usize>() {
+                                                    range_end = end;
+                                                    has_range = true;
+                                                }
                                             }
                                         }
                                     }
@@ -198,6 +206,7 @@ pub fn start_http_server() {
                             
                             let mut response = tiny_http::Response::from_data(buffer)
                                 .with_header(tiny_http::Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap())
+                                .with_header(tiny_http::Header::from_bytes(&b"Access-Control-Expose-Headers"[..], &b"Content-Length, Content-Range, Accept-Ranges"[..]).unwrap())
                                 .with_header(tiny_http::Header::from_bytes(&b"Accept-Ranges"[..], &b"bytes"[..]).unwrap())
                                 .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], content_type.as_bytes()).unwrap());
                             
@@ -316,6 +325,12 @@ struct TitlebarWidgets {
     sep3: gtk::Separator,
     offset_box: gtk::Box,
     subtitle_label: gtk::Label,
+    
+    clear_media_item: gtk::MenuItem,
+    clear_lyrics_item: gtk::MenuItem,
+    load_embedded_item: gtk::MenuItem,
+    export_btn: gtk::Button,
+    export_dropdown: gtk::MenuButton,
 }
 
 #[cfg(target_os = "linux")]
@@ -344,6 +359,54 @@ fn show_titlebar_buttons() -> Result<(), String> {
             });
             gtk::glib::ControlFlow::Break
         });
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn on_app_state_changed(
+    audio_file_name: Option<String>,
+    lyric_file_name: Option<String>,
+    can_clear_media: bool,
+    can_clear_lyrics: bool,
+    can_load_embedded_lyrics: bool,
+) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::prelude::*;
+        let _ = gtk::glib::idle_add_local(move || {
+            TITLEBAR_WIDGETS.with(|widgets| {
+                if let Some(w) = widgets.borrow().as_ref() {
+                    let audio_str = audio_file_name.clone().unwrap_or_else(|| "(無)".to_string());
+                    let lyric_str = lyric_file_name.clone().unwrap_or_else(|| {
+                        if can_load_embedded_lyrics {
+                            "內嵌標籤".to_string()
+                        } else {
+                            "(無)".to_string()
+                        }
+                    });
+                    
+                    let subtitle = format!("音訊: {} | 歌詞: {}", audio_str, lyric_str);
+                    w.subtitle_label.set_text(&subtitle);
+                    
+                    w.clear_media_item.set_sensitive(can_clear_media);
+                    w.clear_lyrics_item.set_sensitive(can_clear_lyrics);
+                    w.load_embedded_item.set_sensitive(can_load_embedded_lyrics);
+                    
+                    w.export_btn.set_sensitive(can_clear_lyrics);
+                    w.export_dropdown.set_sensitive(can_clear_lyrics);
+                }
+            });
+            gtk::glib::ControlFlow::Break
+        });
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = audio_file_name;
+        let _ = lyric_file_name;
+        let _ = can_clear_media;
+        let _ = can_clear_lyrics;
+        let _ = can_load_embedded_lyrics;
     }
     Ok(())
 }
@@ -512,7 +575,7 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             let export_btn = gtk::Button::with_label("匯出 .lrc");
             let webview_clone = webview_window.clone();
             export_btn.connect_clicked(move |_| {
-                let _ = webview_clone.eval("window.AppCommands && window.AppCommands.exportStandard && window.AppCommands.exportStandard()");
+                let _ = webview_clone.eval("window.AppCommands && window.AppCommands.exportCurrent && window.AppCommands.exportCurrent()");
             });
             export_box.pack_start(&export_btn, false, false, 0);
 
@@ -597,6 +660,11 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
                     sep3,
                     offset_box,
                     subtitle_label,
+                    clear_media_item,
+                    clear_lyrics_item,
+                    load_embedded_item,
+                    export_btn,
+                    export_dropdown,
                 });
             });
 
@@ -619,7 +687,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(GStreamerFixPlugin)
-        .invoke_handler(tauri::generate_handler![greet, read_file_binary, save_lyrics_dialog, show_titlebar_buttons])
+        .invoke_handler(tauri::generate_handler![greet, read_file_binary, save_lyrics_dialog, show_titlebar_buttons, on_app_state_changed])
         .setup(|app| {
             #[cfg(target_os = "linux")]
             {
