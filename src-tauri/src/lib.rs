@@ -72,8 +72,47 @@ pub fn start_http_server() {
                     let file_path_str = file_path.to_string_lossy().into_owned();
                     println!("Saved temp media file: {}", file_path_str);
                     
+                    // Check if file is m4a or aac, and instantly transcode to WAV via native ffmpeg
+                    let ext = file_path.extension()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+                    
+                    let mut final_file_name = file_name.clone();
+                    
+                    if ext == "m4a" || ext == "aac" {
+                        let wav_file_name = file_name
+                            .replace(".m4a", ".wav")
+                            .replace(".M4A", ".wav")
+                            .replace(".aac", ".wav")
+                            .replace(".AAC", ".wav");
+                        let wav_file_path = temp_dir.join(&wav_file_name);
+                        
+                        println!("Auto-transcoding M4A/AAC to WAV: {} -> {}", file_path.display(), wav_file_path.display());
+                        
+                        let status = std::process::Command::new("ffmpeg")
+                            .arg("-y")
+                            .arg("-i")
+                            .arg(&file_path)
+                            .arg("-c:a")
+                            .arg("pcm_s16le")
+                            .arg(&wav_file_path)
+                            .status();
+                        
+                        if let Ok(stat) = status {
+                            if stat.success() {
+                                println!("Transcode successful! Returning WAV filename.");
+                                final_file_name = wav_file_name;
+                            } else {
+                                println!("FFmpeg transcode returned error status.");
+                            }
+                        } else {
+                            println!("Failed to execute FFmpeg command.");
+                        }
+                    }
+                    
                     // Return the filename so the JS can build the URL
-                    let response = tiny_http::Response::from_string(file_name)
+                    let response = tiny_http::Response::from_string(final_file_name)
                         .with_header(tiny_http::Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
                     let _ = request.respond(response);
                     
@@ -100,13 +139,16 @@ pub fn start_http_server() {
                                 .unwrap_or("mp3")
                                 .to_lowercase();
                             let content_type = match ext.as_str() {
-                                "flac" => "audio/flac",
                                 "wav" => "audio/wav",
+                                "flac" => "audio/flac",
+                                "mp3" => "audio/mpeg",
+                                "m4a" => "video/quicktime",
+                                "aac" => "audio/aac",
                                 "ogg" | "oga" => "audio/ogg",
                                 "mp4" => "video/mp4",
                                 "mkv" => "video/x-matroska",
                                 "webm" => "video/webm",
-                                _ => "audio/mpeg",
+                                _ => "application/octet-stream",
                             };
                             
                             // Check for Range header
