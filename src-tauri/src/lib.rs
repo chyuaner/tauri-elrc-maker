@@ -369,7 +369,6 @@ struct TitlebarWidgets {
     history_box: gtk::Box,
     export_box: gtk::Box,
     sep3: gtk::Separator,
-    offset_box: gtk::Box,
     subtitle_label: gtk::Label,
     
     clear_media_item: gtk::MenuItem,
@@ -399,7 +398,6 @@ fn show_titlebar_buttons() -> Result<(), String> {
                     w.history_box.show_all();
                     w.export_box.show_all();
                     w.sep3.show();
-                    w.offset_box.show_all();
                     w.subtitle_label.show();
                 }
             });
@@ -653,18 +651,6 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             let sep3 = gtk::Separator::new(gtk::Orientation::Vertical);
             header_bar.pack_end(&sep3);
 
-            // 5. Offset Box (Flat button on Right side)
-            let offset_box = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-
-            let offset_btn = gtk::Button::with_label("時間偏移");
-            let webview_clone = webview_window.clone();
-            offset_btn.connect_clicked(move |_| {
-                let _ = webview_clone.eval("window.AppCommands && window.AppCommands.shiftTime && window.AppCommands.shiftTime()");
-            });
-            offset_box.pack_start(&offset_btn, false, false, 0);
-
-            header_bar.pack_end(&offset_box);
-
             // Enable native window dragging & double-click to maximize on the entire title/subtitle area
             let gtk_window_clone = gtk_window.clone();
             let webview_clone = webview_window.clone();
@@ -692,7 +678,6 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             history_box.set_visible(false);
             export_box.set_visible(false);
             sep3.set_visible(false);
-            offset_box.set_visible(false);
 
             // Store widgets in thread-local for show_titlebar_buttons command
             TITLEBAR_WIDGETS.with(|widgets| {
@@ -704,7 +689,6 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
                     history_box,
                     export_box,
                     sep3,
-                    offset_box,
                     subtitle_label,
                     clear_media_item,
                     clear_lyrics_item,
