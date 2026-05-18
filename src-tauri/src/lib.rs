@@ -13,6 +13,7 @@ impl<R: tauri::Runtime> tauri::plugin::Plugin<R> for GStreamerFixPlugin {
             (function() {
                 if (window.__ObjectURL_Patched__) return;
                 window.__ObjectURL_Patched__ = true;
+                if (!window.__mediaDurations__) window.__mediaDurations__ = {};
                 const originalCreateObjectURL = URL.createObjectURL;
                 URL.createObjectURL = function(obj) {
                     if (obj instanceof Blob || obj instanceof File) {
@@ -24,8 +25,13 @@ impl<R: tauri::Runtime> tauri::plugin::Plugin<R> for GStreamerFixPlugin {
                                 xhr.setRequestHeader('X-File-Name', encodeURIComponent(obj.name || 'temp_media'));
                                 xhr.send(obj);
                                 if (xhr.status === 200) {
-                                    const returnedFileName = xhr.responseText;
+                                    const resp = JSON.parse(xhr.responseText);
+                                    const returnedFileName = resp.file;
                                     const mediaUrl = 'http://127.0.0.1:12435/media/' + encodeURIComponent(returnedFileName);
+                                    if (resp.duration != null) {
+                                        window.__mediaDurations__[mediaUrl] = resp.duration;
+                                        console.log("Pre-cached duration for", mediaUrl, ":", resp.duration, "s");
+                                    }
                                     console.log("Successfully mapped blob to standard local HTTP media URL:", mediaUrl);
                                     return mediaUrl;
                                 }
@@ -40,6 +46,33 @@ impl<R: tauri::Runtime> tauri::plugin::Plugin<R> for GStreamerFixPlugin {
             })();
         "#.to_string())
     }
+}
+
+/// Parse FLAC duration from raw file bytes.
+/// Reads the STREAMINFO metadata block (always first, always 26 bytes into the file).
+/// FLAC spec: https://xiph.org/flac/format.html#metadata_block_streaminfo
+/// Zero dependencies, zero I/O — just pointer arithmetic on already-read bytes.
+fn parse_flac_duration_from_bytes(bytes: &[u8]) -> Option<f64> {
+    if bytes.len() < 26 { return None; }
+    // Marker "fLaC"
+    if &bytes[0..4] != b"fLaC" { return None; }
+    // Byte 4: last-metadata flag (bit 7) + block type (bits 6-0). Must be 0 = STREAMINFO.
+    if (bytes[4] & 0x7f) != 0 { return None; }
+    // Sample rate: bits 0-19 of the 64-bit field starting at byte 18
+    //   byte18 = sr[19..12], byte19 = sr[11..4], byte20[7..4] = sr[3..0]
+    let sample_rate = ((bytes[18] as u32) << 12)
+        | ((bytes[19] as u32) << 4)
+        | ((bytes[20] as u32) >> 4);
+    if sample_rate == 0 { return None; }
+    // Total samples: bits 28-63 of the same 64-bit field
+    //   byte21[3..0] = ts[35..32], bytes 22-25 = ts[31..0]
+    let total_samples = (((bytes[21] & 0x0f) as u64) << 32)
+        | ((bytes[22] as u64) << 24)
+        | ((bytes[23] as u64) << 16)
+        | ((bytes[24] as u64) << 8)
+        |  (bytes[25] as u64);
+    if total_samples == 0 { return None; }
+    Some(total_samples as f64 / sample_rate as f64)
 }
 
 pub fn start_http_server() {
@@ -79,6 +112,13 @@ pub fn start_http_server() {
                         .to_lowercase();
                     
                     let mut final_file_name = file_name.clone();
+
+                    // Parse FLAC duration from already-read bytes (no extra I/O, no transcoding)
+                    let flac_duration: Option<f64> = if ext == "flac" {
+                        parse_flac_duration_from_bytes(&bytes)
+                    } else {
+                        None
+                    };
                     
                     if ext == "m4a" || ext == "aac" {
                         let wav_file_name = file_name
@@ -111,8 +151,14 @@ pub fn start_http_server() {
                         }
                     }
                     
-                    // Return the filename so the JS can build the URL
-                    let response = tiny_http::Response::from_string(final_file_name)
+                    // Return JSON {file, duration} so JS can pre-cache the duration
+                    let duration_json = flac_duration
+                        .map(|d| format!("{:.6}", d))
+                        .unwrap_or_else(|| "null".to_string());
+                    let safe_name = final_file_name.replace('\\', "\\\\").replace('"', "\\\"");
+                    let json_body = format!("{{\"file\":\"{}\",\"duration\":{}}}", safe_name, duration_json);
+                    let response = tiny_http::Response::from_string(json_body)
+                        .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap())
                         .with_header(tiny_http::Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
                     let _ = request.respond(response);
                     
