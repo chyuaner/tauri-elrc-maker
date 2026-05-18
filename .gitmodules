@@ -1,3 +1,3 @@
 [submodule "aistudio-elrc-maker"]
 	path = aistudio-elrc-maker
-	url = https://github.com/chyuaner/aistudio-elrc-maker.git
+	url = git@github.com:chyuaner/aistudio-elrc-maker.git
