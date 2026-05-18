@@ -266,6 +266,72 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(GStreamerFixPlugin)
         .invoke_handler(tauri::generate_handler![greet, read_file_binary])
+        .setup(|app| {
+            #[cfg(target_os = "linux")]
+            {
+                use tauri::Manager;
+                use tauri::Emitter;
+                use gtk::prelude::*;
+
+                if let Some(window) = app.get_webview_window("main") {
+                    if let Ok(gtk_window) = window.gtk_window() {
+                        let app_handle = app.handle().clone();
+                        
+                        // We will try to add a button to the existing headerbar
+                        if let Some(titlebar) = gtk_window.titlebar() {
+                            if let Ok(header_bar) = titlebar.downcast::<gtk::HeaderBar>() {
+                                let test_button = gtk::Button::with_label("測試按鈕");
+                                let app_handle_clone = app_handle.clone();
+                                test_button.connect_clicked(move |_| {
+                                    println!("Native GTK3 button clicked in existing HeaderBar!");
+                                    let _ = app_handle_clone.emit("native-button-clicked", "Hello from GTK3 Titlebar!");
+                                });
+                                header_bar.pack_start(&test_button);
+                                test_button.show();
+                                println!("Successfully added button to existing GTK3 HeaderBar!");
+                            } else {
+                                println!("Titlebar widget is not a HeaderBar, creating our own.");
+                                // Fallback: Create our own
+                                let header_bar = gtk::HeaderBar::new();
+                                header_bar.set_show_close_button(true);
+                                header_bar.set_title(Some("tauri-elrc-maker"));
+
+                                let test_button = gtk::Button::with_label("測試按鈕");
+                                let app_handle_clone = app_handle.clone();
+                                test_button.connect_clicked(move |_| {
+                                    println!("Native GTK3 button clicked in new HeaderBar!");
+                                    let _ = app_handle_clone.emit("native-button-clicked", "Hello from GTK3 Titlebar!");
+                                });
+                                header_bar.pack_start(&test_button);
+                                
+                                gtk_window.set_titlebar(Some(&header_bar));
+                                header_bar.show_all();
+                                println!("Successfully created and set new GTK3 HeaderBar with button!");
+                            }
+                        } else {
+                            // If there's no existing titlebar (or it returns None), we create a new one!
+                            let header_bar = gtk::HeaderBar::new();
+                            header_bar.set_show_close_button(true);
+                            header_bar.set_title(Some("tauri-elrc-maker"));
+
+                            let test_button = gtk::Button::with_label("測試按鈕");
+                            let app_handle_clone = app_handle.clone();
+                            test_button.connect_clicked(move |_| {
+                                println!("Native GTK3 button clicked in new HeaderBar!");
+                                let _ = app_handle_clone.emit("native-button-clicked", "Hello from GTK3 Titlebar!");
+                            });
+                            header_bar.pack_start(&test_button);
+                            
+                            gtk_window.set_titlebar(Some(&header_bar));
+                            header_bar.show_all();
+                            println!("Successfully created and set new GTK3 HeaderBar with button!");
+                        }
+                    }
+                }
+            }
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+

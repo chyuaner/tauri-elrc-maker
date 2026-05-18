@@ -3426,6 +3426,7 @@ dependencies = [
 name = "tauri-elrc-maker"
 version = "0.1.0"
 dependencies = [
+ "gtk",
  "percent-encoding",
  "serde",
  "serde_json",
