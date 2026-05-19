@@ -418,6 +418,7 @@ struct TitlebarWidgets {
     sep3:       gtk::Separator, // 匯出左側的垂直分隔線（右側 pack_end）
     view_box:   gtk::Box,       // 視圖（深淺色、全螢幕）群組
     sep4:       gtk::Separator, // 視圖分隔線
+    lyrics_props_btn: gtk::Button, // 歌詞屬性按鈕
     subtitle_label: gtk::Label, // 標題列中央的副標題（顯示音訊/歌詞檔名）
 
     // ── 需要動態啟用/停用的選單項目（由 on_app_state_changed 控制）──
@@ -463,6 +464,7 @@ fn show_titlebar_buttons() -> Result<(), String> {
                     w.sep3.show();
                     w.view_box.show_all();
                     w.sep4.show();
+                    w.lyrics_props_btn.show();
                     w.subtitle_label.show();
                 }
             });
@@ -488,6 +490,7 @@ fn set_titlebar_buttons_enabled(enabled: bool) -> Result<(), String> {
                     w.history_box.set_sensitive(enabled);
                     w.export_box.set_sensitive(enabled);
                     w.view_box.set_sensitive(enabled);
+                    w.lyrics_props_btn.set_sensitive(enabled);
                 }
             });
             gtk::glib::ControlFlow::Break
@@ -1071,7 +1074,8 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
                     sep3,
                     view_box,
                     sep4,
-                    subtitle_label,
+                    lyrics_props_btn: lyrics_props_btn.clone(),
+                    subtitle_label: subtitle_label.clone(),
                     clear_media_item,
                     clear_lyrics_item,
                     load_embedded_item,
@@ -1093,6 +1097,11 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             // Show only the header_bar container and the custom title_box, keeping all button widgets hidden
             header_bar.show();
             title_box.show_all();
+            
+            // hide button and subtitle initially; they will be shown by show_titlebar_buttons
+            lyrics_props_btn.set_visible(false);
+            subtitle_label.set_visible(false);
+            
             println!("Successfully configured custom Linux GTK3 HeaderBar (initially hidden buttons) with drag support!");
         }
     }
