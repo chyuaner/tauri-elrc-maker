@@ -6,9 +6,12 @@
   "scripts": {
     "dev": "npm --prefix aistudio-elrc-maker run dev",
     "dev:window": "npm run tauri dev",
+    "dev:linux:window": "npm run tauri:linux dev",
     "build": "node scripts/build-frontend.cjs",
-    "build:linux": "APPIMAGE_EXTRACT_AND_RUN=1 NO_STRIP=true npm run tauri build",
-    "tauri": "APPIMAGE_EXTRACT_AND_RUN=1 NO_STRIP=true tauri"
+    "build:linux": "npm run tauri:linux build",
+    "tauri": "tauri",
+    "tauri:linux": "APPIMAGE_EXTRACT_AND_RUN=1 NO_STRIP=true tauri",
+    "tauri:linux:dev": "npm run tauri:linux dev"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
