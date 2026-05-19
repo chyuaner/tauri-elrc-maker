@@ -360,42 +360,51 @@ fn save_lyrics_dialog(window: tauri::WebviewWindow, lyrics_text: String, default
     }
 }
 
+/// 儲存所有需要在執行期動態控制的 GTK 標題列 widget 參照。
+/// 因為 GTK 必須在主執行緒操作，所以使用 thread_local! 包裝。
+/// 前端呼叫 Tauri command 後，透過 idle_add_local 回到 GTK 主執行緒讀取此結構體。
 #[cfg(target_os = "linux")]
 struct TitlebarWidgets {
-    media_box: gtk::Box,
-    sep1: gtk::Separator,
-    lyrics_box: gtk::Box,
-    sep2: gtk::Separator,
-    history_box: gtk::Box,
-    export_box: gtk::Box,
-    sep3: gtk::Separator,
-    subtitle_label: gtk::Label,
+    // ── 可見性控制：startup 時全部隱藏，等前端 ready 才顯示 ──
+    media_box:  gtk::Box,       // 「媒體」按鈕群組
+    sep1:       gtk::Separator, // 媒體 | 歌詞 之間的垂直分隔線
+    lyrics_box: gtk::Box,       // 「歌詞」按鈕群組
+    sep2:       gtk::Separator, // 歌詞 | 歷史 之間的垂直分隔線
+    history_box: gtk::Box,      // 「復原/重複」按鈕群組
+    export_box: gtk::Box,       // 「匯出」按鈕群組（右側）
+    sep3:       gtk::Separator, // 匯出左側的垂直分隔線（右側 pack_end）
+    subtitle_label: gtk::Label, // 標題列中央的副標題（顯示音訊/歌詞檔名）
 
-    clear_media_item: gtk::MenuItem,
-    clear_lyrics_item: gtk::MenuItem,
-    load_embedded_item: gtk::MenuItem,
-    export_btn: gtk::Button,
-    export_dropdown: gtk::MenuButton,
+    // ── 需要動態啟用/停用的選單項目（由 on_app_state_changed 控制）──
+    clear_media_item:   gtk::MenuItem, // 清除媒體（有媒體時才啟用）
+    clear_lyrics_item:  gtk::MenuItem, // 清除歌詞（有歌詞時才啟用）
+    load_embedded_item: gtk::MenuItem, // 載入內嵌標籤（有內嵌歌詞時才啟用）
+    export_btn:      gtk::Button,      // 匯出主按鈕（有歌詞時才啟用）
+    export_dropdown: gtk::MenuButton,  // 匯出下拉箭頭（有歌詞時才啟用）
 
-    // Undo/Redo buttons and their dropdown menus
-    undo_btn: gtk::Button,
-    redo_btn: gtk::Button,
-    undo_dropdown: gtk::MenuButton,
-    redo_dropdown: gtk::MenuButton,
-    undo_menu: gtk::Menu,
-    redo_menu: gtk::Menu,
+    // ── 復原/重複：按鈕 + 下拉選單（由 on_history_changed 動態重建項目）──
+    undo_btn:      gtk::Button,     // 復原主按鈕（圖示）
+    redo_btn:      gtk::Button,     // 重複主按鈕（圖示）
+    undo_dropdown: gtk::MenuButton, // 復原歷史清單下拉箭頭
+    redo_dropdown: gtk::MenuButton, // 重複歷史清單下拉箭頭
+    undo_menu: gtk::Menu,           // 復原歷史 GtkMenu（每次 on_history_changed 清空重建）
+    redo_menu: gtk::Menu,           // 重複歷史 GtkMenu（每次 on_history_changed 清空重建）
 }
 
+// thread_local 讓 TitlebarWidgets 只存在於 GTK 主執行緒，避免跨執行緒存取 GTK widget。
 #[cfg(target_os = "linux")]
 thread_local! {
     static TITLEBAR_WIDGETS: std::cell::RefCell<Option<TitlebarWidgets>> = std::cell::RefCell::new(None);
 }
 
+/// [Tauri command] 前端 Ready 後呼叫此命令，讓標題列所有按鈕/分隔線一次顯示。
+/// 在 setup 階段這些 widget 都是隱藏的，避免 WebView 尚未載入時顯示無效的按鈕。
 #[tauri::command]
 fn show_titlebar_buttons() -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
         use gtk::prelude::*;
+        // idle_add_local 確保 UI 操作在 GTK 主執行緒執行（Tauri command 在 async 執行緒）
         let _ = gtk::glib::idle_add_local(move || {
             TITLEBAR_WIDGETS.with(|widgets| {
                 if let Some(w) = widgets.borrow().as_ref() {
@@ -409,12 +418,15 @@ fn show_titlebar_buttons() -> Result<(), String> {
                     w.subtitle_label.show();
                 }
             });
-            gtk::glib::ControlFlow::Break
+            gtk::glib::ControlFlow::Break // 執行一次即停止，不重複排程
         });
     }
     Ok(())
 }
 
+/// [Tauri command] 當 Dialog（確認框）開啟時，停用標題列所有按鈕，防止操作衝突。
+/// GTK 的 set_sensitive(false) 會自動遞迴停用容器內所有子 widget，
+/// 所以只需對各 Box 容器操作即可，不必個別設定每顆按鈕。
 #[tauri::command]
 fn set_titlebar_buttons_enabled(enabled: bool) -> Result<(), String> {
     #[cfg(target_os = "linux")]
@@ -423,8 +435,6 @@ fn set_titlebar_buttons_enabled(enabled: bool) -> Result<(), String> {
         let _ = gtk::glib::idle_add_local(move || {
             TITLEBAR_WIDGETS.with(|widgets| {
                 if let Some(w) = widgets.borrow().as_ref() {
-                    // Set sensitivity on each interactive group as a whole.
-                    // GTK propagates set_sensitive to all children automatically.
                     w.media_box.set_sensitive(enabled);
                     w.lyrics_box.set_sensitive(enabled);
                     w.history_box.set_sensitive(enabled);
@@ -437,6 +447,14 @@ fn set_titlebar_buttons_enabled(enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// [Tauri command] 前端每次狀態改變（載入/清除媒體或歌詞）都會呼叫此命令，
+/// 同步更新標題列副標題文字，並根據當前狀態啟用或停用對應的選單項目與按鈕。
+///
+/// 參數說明：
+/// - audio_file_name / lyric_file_name：顯示在副標題的檔名（None 表示未載入）
+/// - can_clear_media：是否有媒體可清除（控制「清除媒體」選單項目）
+/// - can_clear_lyrics：是否有歌詞可操作（控制「清除歌詞」及匯出按鈕）
+/// - can_load_embedded_lyrics：媒體的 tag 內是否有內嵌歌詞（控制「載入內嵌標籤」）
 #[tauri::command]
 fn on_app_state_changed(
     audio_file_name: Option<String>,
@@ -451,22 +469,20 @@ fn on_app_state_changed(
         let _ = gtk::glib::idle_add_local(move || {
             TITLEBAR_WIDGETS.with(|widgets| {
                 if let Some(w) = widgets.borrow().as_ref() {
+                    // 組合副標題文字；若無歌詞檔但有內嵌標籤則顯示「內嵌標籤」
                     let audio_str = audio_file_name.clone().unwrap_or_else(|| "(無)".to_string());
                     let lyric_str = lyric_file_name.clone().unwrap_or_else(|| {
-                        if can_load_embedded_lyrics {
-                            "內嵌標籤".to_string()
-                        } else {
-                            "(無)".to_string()
-                        }
+                        if can_load_embedded_lyrics { "內嵌標籤".to_string() }
+                        else { "(無)".to_string() }
                     });
-                    
-                    let subtitle = format!("音訊: {} | 歌詞: {}", audio_str, lyric_str);
-                    w.subtitle_label.set_text(&subtitle);
-                    
+                    w.subtitle_label.set_text(&format!("音訊: {} | 歌詞: {}", audio_str, lyric_str));
+
+                    // 根據狀態啟用/停用各選單項目
                     w.clear_media_item.set_sensitive(can_clear_media);
                     w.clear_lyrics_item.set_sensitive(can_clear_lyrics);
                     w.load_embedded_item.set_sensitive(can_load_embedded_lyrics);
-                    
+
+                    // 匯出按鈕與下拉箭頭：只有在有歌詞時才能操作
                     w.export_btn.set_sensitive(can_clear_lyrics);
                     w.export_dropdown.set_sensitive(can_clear_lyrics);
                 }
@@ -476,6 +492,7 @@ fn on_app_state_changed(
     }
     #[cfg(not(target_os = "linux"))]
     {
+        // 非 Linux 平台無標題列，忽略所有參數避免 unused variable 警告
         let _ = audio_file_name;
         let _ = lyric_file_name;
         let _ = can_clear_media;
@@ -485,6 +502,13 @@ fn on_app_state_changed(
     Ok(())
 }
 
+/// [Tauri command] 每次復原/重複歷史堆疊改變時，前端呼叫此命令。
+/// 會動態重建復原與重複的下拉選單項目清單，
+/// 讓使用者可以從標題列直接選擇「復原到某個步驟」。
+///
+/// 參數說明：
+/// - can_undo / can_redo：控制按鈕與下拉箭頭的啟用狀態
+/// - undo_list / redo_list：每個步驟的描述文字（由前端 pastActions/futureActions 提供）
 #[tauri::command]
 fn on_history_changed(
     window: tauri::WebviewWindow,
@@ -499,20 +523,19 @@ fn on_history_changed(
         let _ = gtk::glib::idle_add_local(move || {
             TITLEBAR_WIDGETS.with(|widgets| {
                 if let Some(w) = widgets.borrow().as_ref() {
-                    // Update undo button & dropdown sensitivity
+                    // ── 復原按鈕 ──
                     w.undo_btn.set_sensitive(can_undo);
                     w.undo_dropdown.set_sensitive(can_undo);
 
-                    // Rebuild undo menu items
-                    for child in w.undo_menu.children() {
-                        w.undo_menu.remove(&child);
-                    }
+                    // 清空舊的復原歷史選單，重新填入最新清單
+                    for child in w.undo_menu.children() { w.undo_menu.remove(&child); }
                     let webview = window.clone();
                     for (i, label) in undo_list.iter().enumerate() {
-                        let steps = i + 1;
+                        let steps = i + 1; // steps=1 表示復原最近一步，steps=2 表示復原前兩步，依此類推
                         let item = gtk::MenuItem::with_label(&format!("復原到: {}", label));
                         let wv = webview.clone();
                         item.connect_activate(move |_| {
+                            // 呼叫前端 AppCommands.undoToSequence(steps) 一次復原多步
                             let _ = wv.eval(&format!(
                                 "window.AppCommands && window.AppCommands.undoToSequence && window.AppCommands.undoToSequence({})",
                                 steps
@@ -522,20 +545,19 @@ fn on_history_changed(
                     }
                     w.undo_menu.show_all();
 
-                    // Update redo button & dropdown sensitivity
+                    // ── 重複按鈕 ──
                     w.redo_btn.set_sensitive(can_redo);
                     w.redo_dropdown.set_sensitive(can_redo);
 
-                    // Rebuild redo menu items
-                    for child in w.redo_menu.children() {
-                        w.redo_menu.remove(&child);
-                    }
+                    // 清空舊的重複歷史選單，重新填入最新清單
+                    for child in w.redo_menu.children() { w.redo_menu.remove(&child); }
                     let webview = window.clone();
                     for (i, label) in redo_list.iter().enumerate() {
                         let steps = i + 1;
                         let item = gtk::MenuItem::with_label(&format!("重複到: {}", label));
                         let wv = webview.clone();
                         item.connect_activate(move |_| {
+                            // 呼叫前端 AppCommands.redoToSequence(steps) 一次重複多步
                             let _ = wv.eval(&format!(
                                 "window.AppCommands && window.AppCommands.redoToSequence && window.AppCommands.redoToSequence({})",
                                 steps
@@ -560,6 +582,33 @@ fn on_history_changed(
     Ok(())
 }
 
+/// 建立一個 GtkMenuItem 並連結點擊事件到前端 AppCommands 的指定方法。
+///
+/// # 參數
+/// - `label`：選單項目的顯示文字
+/// - `webview`：Tauri WebviewWindow，用來呼叫 JS eval
+/// - `js_command`：要執行的完整 JS 表達式（AppCommands.xxx()）
+///
+/// # 回傳
+/// 建立好且已連結 connect_activate 的 GtkMenuItem
+#[cfg(target_os = "linux")]
+fn make_menu_item(
+    label: &str,
+    webview: tauri::WebviewWindow,
+    js_command: &'static str,
+) -> gtk::MenuItem {
+    use gtk::prelude::*;
+    let item = gtk::MenuItem::with_label(label);
+    item.connect_activate(move |_| {
+        // eval 會在 WebView 內執行 JS，透過 window.AppCommands 橋接前端邏輯
+        let _ = webview.eval(js_command);
+    });
+    item
+}
+
+/// 初始化 Linux 專用的 GTK3 HeaderBar 標題列。
+/// 這個函式只在 Linux 平台編譯，取代 Tauri 預設的視窗標題列，
+/// 實現自訂按鈕群組、拖曳、雙擊最大化等行為。
 #[cfg(target_os = "linux")]
 fn setup_linux_titlebar(app: &mut tauri::App) {
     use tauri::Manager;
@@ -627,42 +676,52 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             title_box.add(&vbox);
             header_bar.set_custom_title(Some(&title_box));
 
-            // 1. Media Actions (Linked Box)
+            // ══════════════════════════════════════════════════
+            // 1. 媒體群組（HeaderBar 左側第一組，使用 "linked" 樣式讓按鈕緊靠）
+            // ══════════════════════════════════════════════════
             let media_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-            media_box.style_context().add_class("linked");
-            
+            media_box.style_context().add_class("linked"); // GTK "linked" 讓相鄰按鈕共用邊框
+
+            // 主按鈕：開啟系統檔案選擇器載入媒體
             let load_media_btn = gtk::Button::with_label("載入媒體");
             let webview_clone = webview_window.clone();
             load_media_btn.connect_clicked(move |_| {
+                // 透過 eval 呼叫前端 AppCommands.loadMedia()，觸發檔案選擇器
                 let _ = webview_clone.eval("window.AppCommands && window.AppCommands.loadMedia && window.AppCommands.loadMedia()");
             });
             media_box.pack_start(&load_media_btn, false, false, 0);
 
-            // Create media dropdown menu
+            // 下拉選單：「清除媒體」— 由 make_menu_item 統一建立並連結 JS 呼叫
+            // 此項目的 sensitive 狀態由 on_app_state_changed 控制（有媒體才啟用）
             let media_menu = gtk::Menu::new();
-            let clear_media_item = gtk::MenuItem::with_label("清除媒體");
-            let webview_clone = webview_window.clone();
-            clear_media_item.connect_activate(move |_| {
-                let _ = webview_clone.eval("window.AppCommands && window.AppCommands.clearMedia && window.AppCommands.clearMedia()");
-            });
+            let clear_media_item = make_menu_item(
+                "清除媒體",
+                webview_window.clone(),
+                "window.AppCommands && window.AppCommands.clearMedia && window.AppCommands.clearMedia()",
+            );
             media_menu.append(&clear_media_item);
             media_menu.show_all();
 
+            // MenuButton（倒三角箭頭）：點擊展開上方的 GtkMenu
             let media_dropdown = gtk::MenuButton::new();
             media_dropdown.set_popup(Some(&media_menu));
             media_dropdown.set_tooltip_text(Some("媒體選項"));
             media_box.pack_start(&media_dropdown, false, false, 0);
 
+            // 將整個媒體群組從左側加入 HeaderBar
             header_bar.pack_start(&media_box);
 
             // Separator 1
             let sep1 = gtk::Separator::new(gtk::Orientation::Vertical);
             header_bar.pack_start(&sep1);
 
-            // 2. Lyrics Actions (Linked Box)
+            // ══════════════════════════════════════════════════
+            // 2. 歌詞群組（HeaderBar 左側第二組）
+            // ══════════════════════════════════════════════════
             let lyrics_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
             lyrics_box.style_context().add_class("linked");
 
+            // 主按鈕：開啟系統檔案選擇器載入 .lrc 歌詞
             let load_lyrics_btn = gtk::Button::with_label("載入歌詞");
             let webview_clone = webview_window.clone();
             load_lyrics_btn.connect_clicked(move |_| {
@@ -670,38 +729,41 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             });
             lyrics_box.pack_start(&load_lyrics_btn, false, false, 0);
 
-            // Create lyrics dropdown menu (aligned with TopToolbar.tsx order)
+            // 下拉選單（順序與 TopToolbar.tsx 對齊）
             let lyrics_menu = gtk::Menu::new();
 
-            // 1. 載入歌詞檔案
-            let load_lyrics_menu_item = gtk::MenuItem::with_label("載入歌詞檔案");
-            let webview_clone = webview_window.clone();
-            load_lyrics_menu_item.connect_activate(move |_| {
-                let _ = webview_clone.eval("window.AppCommands && window.AppCommands.loadLyrics && window.AppCommands.loadLyrics()");
-            });
+            // 項目 1：載入歌詞檔案（與主按鈕功能相同，方便從下拉操作）
+            let load_lyrics_menu_item = make_menu_item(
+                "載入歌詞檔案",
+                webview_window.clone(),
+                "window.AppCommands && window.AppCommands.loadLyrics && window.AppCommands.loadLyrics()",
+            );
             lyrics_menu.append(&load_lyrics_menu_item);
 
-            // 2. 載入內嵌標籤
-            let load_embedded_item = gtk::MenuItem::with_label("載入內嵌標籤");
-            let webview_clone = webview_window.clone();
-            load_embedded_item.connect_activate(move |_| {
-                let _ = webview_clone.eval("window.AppCommands && window.AppCommands.loadEmbeddedLyrics && window.AppCommands.loadEmbeddedLyrics()");
-            });
+            // 項目 2：從媒體的 ID3/Vorbis tag 載入內嵌歌詞
+            // sensitive 由 on_app_state_changed 控制（媒體 tag 有歌詞才啟用）
+            let load_embedded_item = make_menu_item(
+                "載入內嵌標籤",
+                webview_window.clone(),
+                "window.AppCommands && window.AppCommands.loadEmbeddedLyrics && window.AppCommands.loadEmbeddedLyrics()",
+            );
             lyrics_menu.append(&load_embedded_item);
 
-            // 3. 分隔線
+            // 水平分隔線，對應前端 <Separator /> 元件
             let lyrics_sep = gtk::SeparatorMenuItem::new();
             lyrics_menu.append(&lyrics_sep);
 
-            // 4. 清除歌詞
-            let clear_lyrics_item = gtk::MenuItem::with_label("清除歌詞");
-            let webview_clone = webview_window.clone();
-            clear_lyrics_item.connect_activate(move |_| {
-                let _ = webview_clone.eval("window.AppCommands && window.AppCommands.clearLyrics && window.AppCommands.clearLyrics()");
-            });
+            // 項目 3：清除目前已載入的歌詞
+            // sensitive 由 on_app_state_changed 控制（有歌詞才啟用）
+            let clear_lyrics_item = make_menu_item(
+                "清除歌詞",
+                webview_window.clone(),
+                "window.AppCommands && window.AppCommands.clearLyrics && window.AppCommands.clearLyrics()",
+            );
             lyrics_menu.append(&clear_lyrics_item);
             lyrics_menu.show_all();
 
+            // MenuButton（倒三角箭頭）連結到歌詞下拉選單
             let lyrics_dropdown = gtk::MenuButton::new();
             lyrics_dropdown.set_popup(Some(&lyrics_menu));
             lyrics_dropdown.set_tooltip_text(Some("歌詞選項"));
@@ -755,10 +817,13 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
 
             header_bar.pack_start(&history_box);
 
-            // 4. Export Actions (Linked Box on Right side)
+            // ══════════════════════════════════════════════════
+            // 4. 匯出群組（pack_end 放在 HeaderBar 右側）
+            // ══════════════════════════════════════════════════
             let export_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
             export_box.style_context().add_class("linked");
 
+            // 主按鈕：快速匯出目前格式
             let export_btn = gtk::Button::with_label("匯出 .lrc");
             let webview_clone = webview_window.clone();
             export_btn.connect_clicked(move |_| {
@@ -766,31 +831,33 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             });
             export_box.pack_start(&export_btn, false, false, 0);
 
-            // Create export dropdown menu (aligned with TopToolbar.tsx)
+            // 下拉選單：選擇不同的匯出格式
             let export_menu = gtk::Menu::new();
 
-            // 標準匯出 (.lrc)
-            let export_standard_item = gtk::MenuItem::with_label("標準 LRC (行同步)");
-            let webview_clone = webview_window.clone();
-            export_standard_item.connect_activate(move |_| {
-                let _ = webview_clone.eval("window.AppCommands && window.AppCommands.exportStandard && window.AppCommands.exportStandard()");
-            });
+            // 標準 LRC：每行一個時間戳，相容大多數播放器
+            let export_standard_item = make_menu_item(
+                "標準 LRC (行同步)",
+                webview_window.clone(),
+                "window.AppCommands && window.AppCommands.exportStandard && window.AppCommands.exportStandard()",
+            );
             export_menu.append(&export_standard_item);
 
-            // 加強匯出 (.elrc)
-            let export_enhanced_item = gtk::MenuItem::with_label("逐字版 LRC (ESLyric - 逐字同步)");
-            let webview_clone = webview_window.clone();
-            export_enhanced_item.connect_activate(move |_| {
-                let _ = webview_clone.eval("window.AppCommands && window.AppCommands.exportEnhanced && window.AppCommands.exportEnhanced()");
-            });
+            // 逐字版 LRC：每個字詞獨立時間戳，供 ESLyric 等進階播放器使用
+            let export_enhanced_item = make_menu_item(
+                "逐字版 LRC (ESLyric - 逐字同步)",
+                webview_window.clone(),
+                "window.AppCommands && window.AppCommands.exportEnhanced && window.AppCommands.exportEnhanced()",
+            );
             export_menu.append(&export_enhanced_item);
             export_menu.show_all();
 
+            // MenuButton（倒三角箭頭）連結到匯出下拉選單
             let export_dropdown = gtk::MenuButton::new();
             export_dropdown.set_popup(Some(&export_menu));
             export_dropdown.set_tooltip_text(Some("匯出選項"));
             export_box.pack_start(&export_dropdown, false, false, 0);
 
+            // 匯出群組放右側（pack_end 由右往左排）
             header_bar.pack_end(&export_box);
 
             // Separator 3 (Right side)
