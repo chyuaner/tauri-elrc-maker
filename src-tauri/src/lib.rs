@@ -625,28 +625,78 @@ fn on_history_changed(
     Ok(())
 }
 
-/// 建立一個 GtkMenuItem 並連結點擊事件到前端 AppCommands 的指定方法。
+/// 建立一個帶圖示的 GtkImageMenuItem 並連結點擊事件到前端 AppCommands 的指定方法。
 ///
 /// # 參數
 /// - `label`：選單項目的顯示文字
+/// - `icon_name`：GTK symbolic icon 名稱（如 `"edit-clear-symbolic"`），None 則不顯示圖示
+/// - `danger`：若為 true，以紅色（`#f87171`，對應前端 `text-red-400`）顯示圖示與文字
 /// - `webview`：Tauri WebviewWindow，用來呼叫 JS eval
 /// - `js_command`：要執行的完整 JS 表達式（AppCommands.xxx()）
 ///
 /// # 回傳
-/// 建立好且已連結 connect_activate 的 GtkMenuItem
+/// 建立好且已連結 connect_activate 的 GtkMenuItem（內含 GtkBox 組合圖示與文字）
 #[cfg(target_os = "linux")]
 fn make_menu_item(
     label: &str,
+    icon_name: Option<&str>,
+    danger: bool,
     webview: tauri::WebviewWindow,
     js_command: &'static str,
 ) -> gtk::MenuItem {
     use gtk::prelude::*;
-    let item = gtk::MenuItem::with_label(label);
+    let item = gtk::MenuItem::new();
+
+    // 用 HBox 組合圖示與文字，對應前端 flex items-center gap-2 的排版方式
+    let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    if let Some(icon) = icon_name {
+        let image = gtk::Image::from_icon_name(Some(icon), gtk::IconSize::Menu);
+        // [DANGER] 對應前端 text-red-400：將 symbolic icon 強制渲染為紅色
+        if danger {
+            let css = gtk::CssProvider::new();
+            let _ = css.load_from_data(b"image { color: #f87171; }");
+            image.style_context().add_provider(&css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+        }
+        hbox.pack_start(&image, false, false, 0);
+    }
+    let lbl = gtk::Label::new(Some(label));
+    lbl.set_xalign(0.0); // 靠左對齊，與 GTK 原生選單一致
+    // [DANGER] 對應前端 text-red-400 (#f87171 ≈ Tailwind red-400）
+    if danger {
+        let css = gtk::CssProvider::new();
+        let _ = css.load_from_data(b"label { color: #f87171; }");
+        lbl.style_context().add_provider(&css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+    }
+    hbox.pack_start(&lbl, true, true, 0);
+    item.add(&hbox);
+
     item.connect_activate(move |_| {
         // eval 會在 WebView 內執行 JS，透過 window.AppCommands 橋接前端邏輯
         let _ = webview.eval(js_command);
     });
     item
+}
+
+/// 建立一個帶圖示+文字標籤的 GtkButton，對應前端按鈕的 flex items-center gap-2 排版。
+///
+/// # 參數
+/// - `label`：按鈕顯示文字
+/// - `icon_name`：GTK symbolic icon 名稱
+///
+/// # 回傳
+/// 設定好外觀的 GtkButton（尚未連結 click 事件）
+#[cfg(target_os = "linux")]
+fn make_icon_button(label: &str, icon_name: &str) -> gtk::Button {
+    use gtk::prelude::*;
+    let btn = gtk::Button::new();
+    let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    let image = gtk::Image::from_icon_name(Some(icon_name), gtk::IconSize::SmallToolbar);
+    let lbl = gtk::Label::new(Some(label));
+    hbox.pack_start(&image, false, false, 0);
+    hbox.pack_start(&lbl, false, false, 0);
+    hbox.show_all();
+    btn.add(&hbox);
+    btn
 }
 
 /// 初始化 Linux 專用的 GTK3 HeaderBar 標題列。
@@ -726,7 +776,8 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             media_box.style_context().add_class("linked"); // GTK "linked" 讓相鄰按鈕共用邊框
 
             // 主按鈕：開啟系統檔案選擇器載入媒體
-            let load_media_btn = gtk::Button::with_label("載入媒體");
+            // 對應 TopToolbar.tsx: <Music className="w-3.5 h-3.5 text-blue-400" /> + {i18n.loadMedia}
+            let load_media_btn = make_icon_button("載入媒體", "audio-x-generic-symbolic");
             let webview_clone = webview_window.clone();
             load_media_btn.connect_clicked(move |_| {
                 // 透過 eval 呼叫前端 AppCommands.loadMedia()，觸發檔案選擇器
@@ -735,10 +786,13 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             media_box.pack_start(&load_media_btn, false, false, 0);
 
             // 下拉選單：「清除媒體」— 由 make_menu_item 統一建立並連結 JS 呼叫
+            // 對應 TopToolbar.tsx: <X className="w-3.5 h-3.5" /> + {i18n.clearMedia}（紅色）
             // 此項目的 sensitive 狀態由 on_app_state_changed 控制（有媒體才啟用）
             let media_menu = gtk::Menu::new();
             let clear_media_item = make_menu_item(
                 "清除媒體",
+                Some("edit-delete-symbolic"), // 對應前端 <X /> 圖示（刪除/清除語意）
+                true,  // danger=true → 紅色文字/圖示，對應前端 text-red-400
                 webview_window.clone(),
                 "window.AppCommands && window.AppCommands.clearMedia && window.AppCommands.clearMedia()",
             );
@@ -765,7 +819,8 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             lyrics_box.style_context().add_class("linked");
 
             // 主按鈕：開啟系統檔案選擇器載入 .lrc 歌詞
-            let load_lyrics_btn = gtk::Button::with_label("載入歌詞");
+            // 對應 TopToolbar.tsx: <FileText className="w-3.5 h-3.5 text-purple-400" /> + {i18n.loadLyrics}
+            let load_lyrics_btn = make_icon_button("載入歌詞", "document-open-symbolic");
             let webview_clone = webview_window.clone();
             load_lyrics_btn.connect_clicked(move |_| {
                 let _ = webview_clone.eval("window.AppCommands && window.AppCommands.loadLyrics && window.AppCommands.loadLyrics()");
@@ -776,30 +831,39 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             let lyrics_menu = gtk::Menu::new();
 
             // 項目 1：載入歌詞檔案（與主按鈕功能相同，方便從下拉操作）
+            // 對應 TopToolbar.tsx 下拉第一項：{i18n.loadLyrics}
             let load_lyrics_menu_item = make_menu_item(
                 "載入歌詞檔案",
+                Some("document-open-symbolic"), // 與主按鈕圖示一致
+                false,
                 webview_window.clone(),
                 "window.AppCommands && window.AppCommands.loadLyrics && window.AppCommands.loadLyrics()",
             );
             lyrics_menu.append(&load_lyrics_menu_item);
 
             // 項目 2：從媒體的 ID3/Vorbis tag 載入內嵌歌詞
+            // 對應 TopToolbar.tsx: {i18n.loadEmbeddedLyrics}
             // sensitive 由 on_app_state_changed 控制（媒體 tag 有歌詞才啟用）
             let load_embedded_item = make_menu_item(
                 "載入內嵌標籤",
+                Some("emblem-music-symbolic"), // 代表「內嵌於媒體中」的標籤語意
+                false,
                 webview_window.clone(),
                 "window.AppCommands && window.AppCommands.loadEmbeddedLyrics && window.AppCommands.loadEmbeddedLyrics()",
             );
             lyrics_menu.append(&load_embedded_item);
 
-            // 水平分隔線，對應前端 <Separator /> 元件
+            // 水平分隔線，對應前端 <div className="h-px bg-[var(--app-border-base)]" />
             let lyrics_sep = gtk::SeparatorMenuItem::new();
             lyrics_menu.append(&lyrics_sep);
 
             // 項目 3：清除目前已載入的歌詞
+            // 對應 TopToolbar.tsx: <X className="w-3.5 h-3.5" /> + {i18n.clearLyrics}（紅色）
             // sensitive 由 on_app_state_changed 控制（有歌詞才啟用）
             let clear_lyrics_item = make_menu_item(
                 "清除歌詞",
+                Some("edit-delete-symbolic"), // 對應前端 <X /> 圖示
+                true,  // danger=true → 紅色文字/圖示，對應前端 text-red-400
                 webview_window.clone(),
                 "window.AppCommands && window.AppCommands.clearLyrics && window.AppCommands.clearLyrics()",
             );
@@ -867,7 +931,8 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             export_box.style_context().add_class("linked");
 
             // 主按鈕：快速匯出目前格式
-            let export_btn = gtk::Button::with_label("匯出 .lrc");
+            // 對應 TopToolbar.tsx: <Download className="w-4 h-4" /> + {i18n.exportLrc}
+            let export_btn = make_icon_button("匯出 .lrc", "document-save-symbolic");
             let webview_clone = webview_window.clone();
             export_btn.connect_clicked(move |_| {
                 let _ = webview_clone.eval("window.AppCommands && window.AppCommands.exportCurrent && window.AppCommands.exportCurrent()");
@@ -878,16 +943,22 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             let export_menu = gtk::Menu::new();
 
             // 標準 LRC：每行一個時間戳，相容大多數播放器
+            // 對應 TopToolbar.tsx 下拉第一項：{i18n.exportStandard}
             let export_standard_item = make_menu_item(
                 "標準 LRC (行同步)",
+                Some("document-save-symbolic"), // 與主按鈕圖示一致
+                false,
                 webview_window.clone(),
                 "window.AppCommands && window.AppCommands.exportStandard && window.AppCommands.exportStandard()",
             );
             export_menu.append(&export_standard_item);
 
             // 逐字版 LRC：每個字詞獨立時間戳，供 ESLyric 等進階播放器使用
+            // 對應 TopToolbar.tsx 下拉第二項：{i18n.exportEnhanced}
             let export_enhanced_item = make_menu_item(
                 "逐字版 LRC (ESLyric - 逐字同步)",
+                Some("document-save-as-symbolic"), // save-as 語意更接近「另存為其他格式」
+                false,
                 webview_window.clone(),
                 "window.AppCommands && window.AppCommands.exportEnhanced && window.AppCommands.exportEnhanced()",
             );
