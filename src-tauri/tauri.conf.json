@@ -13,7 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "tauri-elrc-maker",
+        "title": "LRC Maker Enhanced",
         "width": 1368,
         "height": 768,
         "titleBarStyle": "Overlay",
