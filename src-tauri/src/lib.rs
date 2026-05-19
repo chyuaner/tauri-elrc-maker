@@ -1,6 +1,19 @@
 use std::thread;
 use std::io::{Read, Write, Seek};
 
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║  [LINUX WORKAROUND] GStreamer + WebKitGTK 媒體播放相容性修正              ║
+// ╠══════════════════════════════════════════════════════════════════════════╣
+// ║  問題：Tauri on Linux 使用 WebKitGTK，底層媒體解碼依賴 GStreamer。         ║
+// ║        GStreamer 無法播放 Blob URL（blob:// scheme），                    ║
+// ║        導致前端 URL.createObjectURL(file) 建立的音訊 URL 無法播放。        ║
+// ║                                                                          ║
+// ║  解法（Workaround）：                                                     ║
+// ║    1. 本 Plugin 在頁面初始化時注入 JS，monkey-patch URL.createObjectURL   ║
+// ║    2. 攔截到媒體 Blob 時，同步 POST 到本機 HTTP Server（port 12435）      ║
+// ║    3. Server 儲存為 /tmp/ 暫存檔，回傳 http://127.0.0.1:12435/media/URL  ║
+// ║    4. 前端改用此標準 HTTP URL 播放，GStreamer 可正常串流                   ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
 struct GStreamerFixPlugin;
 
 impl<R: tauri::Runtime> tauri::plugin::Plugin<R> for GStreamerFixPlugin {
@@ -8,18 +21,30 @@ impl<R: tauri::Runtime> tauri::plugin::Plugin<R> for GStreamerFixPlugin {
         "gstreamer-fix"
     }
 
+    /// [LINUX WORKAROUND] 在 WebView 頁面載入前注入的 JS 初始化腳本。
+    /// Monkey-patch URL.createObjectURL，將媒體 Blob 轉發到本機 HTTP Server，
+    /// 回傳 GStreamer 可播放的 http://127.0.0.1:12435/media/ URL。
     fn initialization_script(&self) -> Option<String> {
         Some(r#"
             (function() {
+                // 防止 SPA 路由切換時重複 patch
                 if (window.__ObjectURL_Patched__) return;
                 window.__ObjectURL_Patched__ = true;
+
+                // 快取各 HTTP URL 對應的音訊時長（秒），
+                // 修正 GStreamer 串流模式下 <audio>.duration 回傳 Infinity 的問題
                 if (!window.__mediaDurations__) window.__mediaDurations__ = {};
+
                 const originalCreateObjectURL = URL.createObjectURL;
+
+                // [WORKAROUND] 攔截 createObjectURL，替換成本機 HTTP URL
                 URL.createObjectURL = function(obj) {
                     if (obj instanceof Blob || obj instanceof File) {
                         if (obj.type.startsWith('audio/') || obj.type.startsWith('video/')) {
                             console.log("Intercepted media file creation:", obj.name, obj.type);
                             try {
+                                // 必須用同步 XHR，因為 createObjectURL 本身是同步 API
+                                // 將 Blob POST 到 Rust HTTP Server 儲存成 /tmp/ 暫存檔
                                 const xhr = new XMLHttpRequest();
                                 xhr.open('POST', 'http://127.0.0.1:12435/save', false);
                                 xhr.setRequestHeader('X-File-Name', encodeURIComponent(obj.name || 'temp_media'));
@@ -27,7 +52,9 @@ impl<R: tauri::Runtime> tauri::plugin::Plugin<R> for GStreamerFixPlugin {
                                 if (xhr.status === 200) {
                                     const resp = JSON.parse(xhr.responseText);
                                     const returnedFileName = resp.file;
+                                    // 改用標準 HTTP URL，GStreamer 可正常串流
                                     const mediaUrl = 'http://127.0.0.1:12435/media/' + encodeURIComponent(returnedFileName);
+                                    // 若 Server 回傳了預先解析的時長（目前僅 FLAC），快取起來
                                     if (resp.duration != null) {
                                         window.__mediaDurations__[mediaUrl] = resp.duration;
                                         console.log("Pre-cached duration for", mediaUrl, ":", resp.duration, "s");
@@ -40,7 +67,7 @@ impl<R: tauri::Runtime> tauri::plugin::Plugin<R> for GStreamerFixPlugin {
                             }
                         }
                     }
-                    return originalCreateObjectURL.apply(this, arguments);
+                    return originalCreateObjectURL.apply(this, arguments); // 非媒體或失敗時走原始流程
                 };
                 console.log("URL.createObjectURL successfully monkeypatched for GStreamer compatibility!");
             })();
@@ -48,10 +75,17 @@ impl<R: tauri::Runtime> tauri::plugin::Plugin<R> for GStreamerFixPlugin {
     }
 }
 
-/// Parse FLAC duration from raw file bytes.
-/// Reads the STREAMINFO metadata block (always first, always 26 bytes into the file).
-/// FLAC spec: https://xiph.org/flac/format.html#metadata_block_streaminfo
-/// Zero dependencies, zero I/O — just pointer arithmetic on already-read bytes.
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║  [LINUX WORKAROUND] FLAC 時長解析（無 transcoding，純位元組計算）          ║
+// ╠══════════════════════════════════════════════════════════════════════════╣
+// ║  問題：GStreamer 以串流模式播放時，<audio>.duration 回傳 Infinity。         ║
+// ║        FLAC header（STREAMINFO block）包含取樣率和總樣本數，可直接計算。    ║
+// ║        在 /save 時順便解析並回傳給前端快取，完全繞過這個限制。               ║
+// ║  注意：MP3/WAV/OGG 目前無此處理，duration 可能仍顯示 Infinity。            ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
+
+/// 從 FLAC 原始位元組解析時長（秒）。讀取 STREAMINFO block（byte 4-25）。
+/// 參考：<https://xiph.org/flac/format.html#metadata_block_streaminfo>
 fn parse_flac_duration_from_bytes(bytes: &[u8]) -> Option<f64> {
     if bytes.len() < 26 { return None; }
     // Marker "fLaC"
@@ -76,15 +110,23 @@ fn parse_flac_duration_from_bytes(bytes: &[u8]) -> Option<f64> {
 }
 
 pub fn start_http_server() {
+    // ╔══════════════════════════════════════════════════════════════════════╗
+    // ║  [LINUX WORKAROUND] 本機 HTTP 媒體串流伺服器（port 12435）           ║
+    // ╠══════════════════════════════════════════════════════════════════════╣
+    // ║  為何不用 Tauri 自訂協議（asset://）？                               ║
+    // ║    asset:// 不支援 HTTP Range 請求，GStreamer seek 會失效。           ║
+    // ║  API：POST /save（接收Blob）、GET /media/<file>（串流回傳）           ║
+    // ║  ⚠ 暫存檔存於 /tmp/，不會自動清除，重開機才消失。                    ║
+    // ╚══════════════════════════════════════════════════════════════════════╝
     thread::spawn(|| {
         if let Ok(server) = tiny_http::Server::http("127.0.0.1:12435") {
             println!("Local GStreamer temp-media sync server started on port 12435!");
             for mut request in server.incoming_requests() {
                 let url = request.url().to_string();
                 let method = request.method().clone();
-                
+
+                // ── POST /save：接收 Blob、儲存暫存檔、視需要轉檔 ────────────
                 if url == "/save" && method == tiny_http::Method::Post {
-                    // --- SAVE ENDPOINT ---
                     let file_name = request.headers().iter()
                         .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case("X-File-Name"))
                         .map(|h| h.value.as_str())
@@ -102,18 +144,22 @@ pub fn start_http_server() {
                         let _ = file.write_all(&bytes);
                     }
                     
-                    let file_path_str = file_path.to_string_lossy().into_owned();
-                    println!("Saved temp media file: {}", file_path_str);
-                    
-                    // Check if file is m4a or aac, and instantly transcode to WAV via native ffmpeg
+                    println!("Saved temp media file: {}", file_path.display());
+
+                    // [WORKAROUND] M4A/AAC → WAV 自動轉檔
+                    // 原因：GStreamer 播放 M4A/AAC 需要 gstreamer1.0-plugins-bad 或
+                    //       gstreamer1.0-libav，多數 Linux 預設未安裝。
+                    //       轉成 PCM WAV 可完全避免此依賴問題。
+                    // ⚠ 需求：系統需安裝 ffmpeg（`sudo apt install ffmpeg`）。
                     let ext = file_path.extension()
                         .and_then(|s| s.to_str())
                         .unwrap_or("")
                         .to_lowercase();
-                    
+
                     let mut final_file_name = file_name.clone();
 
-                    // Parse FLAC duration from already-read bytes (no extra I/O, no transcoding)
+                    // [WORKAROUND] FLAC 時長預解析
+                    // GStreamer 串流 FLAC 時 duration=Infinity，在此預先計算並回傳前端快取
                     let flac_duration: Option<f64> = if ext == "flac" {
                         parse_flac_duration_from_bytes(&bytes)
                     } else {
@@ -122,23 +168,17 @@ pub fn start_http_server() {
                     
                     if ext == "m4a" || ext == "aac" {
                         let wav_file_name = file_name
-                            .replace(".m4a", ".wav")
-                            .replace(".M4A", ".wav")
-                            .replace(".aac", ".wav")
-                            .replace(".AAC", ".wav");
+                            .replace(".m4a", ".wav").replace(".M4A", ".wav")
+                            .replace(".aac", ".wav").replace(".AAC", ".wav");
                         let wav_file_path = temp_dir.join(&wav_file_name);
-                        
                         println!("Auto-transcoding M4A/AAC to WAV: {} -> {}", file_path.display(), wav_file_path.display());
-                        
+                        // -y 覆蓋輸出檔；-c:a pcm_s16le = 16-bit PCM（GStreamer 原生支援）
                         let status = std::process::Command::new("ffmpeg")
                             .arg("-y")
-                            .arg("-i")
-                            .arg(&file_path)
-                            .arg("-c:a")
-                            .arg("pcm_s16le")
+                            .arg("-i").arg(&file_path)
+                            .arg("-c:a").arg("pcm_s16le")
                             .arg(&wav_file_path)
                             .status();
-                        
                         if let Ok(stat) = status {
                             if stat.success() {
                                 println!("Transcode successful! Returning WAV filename.");
@@ -147,11 +187,12 @@ pub fn start_http_server() {
                                 println!("FFmpeg transcode returned error status.");
                             }
                         } else {
-                            println!("Failed to execute FFmpeg command.");
+                            println!("Failed to execute FFmpeg command (is ffmpeg installed?).");
                         }
                     }
                     
-                    // Return JSON {file, duration} so JS can pre-cache the duration
+                    // 回傳 JSON {file, duration}：前端用 file 組 /media/ URL，
+                    // duration 用來修正 GStreamer 串流模式下 <audio>.duration=Infinity 的問題
                     let duration_json = flac_duration
                         .map(|d| format!("{:.6}", d))
                         .unwrap_or_else(|| "null".to_string());
@@ -163,7 +204,9 @@ pub fn start_http_server() {
                     let _ = request.respond(response);
                     
                 } else if url.starts_with("/media/") && method == tiny_http::Method::Get {
-                    // --- MEDIA SERVING ENDPOINT ---
+                    // ── GET /media/<file>：串流回傳暫存檔，支援 HTTP Range ────
+                    // HTTP Range（RFC 7233）是拖曳進度列的必要條件；
+                    // GStreamer seek 時會發 Range: bytes=N-，不支援則無法拖曳。
                     let file_name_encoded = &url["/media/".len()..];
                     let file_name = percent_encoding::percent_decode_str(file_name_encoded)
                         .decode_utf8()
