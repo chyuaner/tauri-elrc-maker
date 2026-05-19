@@ -416,6 +416,8 @@ struct TitlebarWidgets {
     history_box: gtk::Box,      // 「復原/重複」按鈕群組
     export_box: gtk::Box,       // 「匯出」按鈕群組（右側）
     sep3:       gtk::Separator, // 匯出左側的垂直分隔線（右側 pack_end）
+    view_box:   gtk::Box,       // 視圖（深淺色、全螢幕）群組
+    sep4:       gtk::Separator, // 視圖分隔線
     subtitle_label: gtk::Label, // 標題列中央的副標題（顯示音訊/歌詞檔名）
 
     // ── 需要動態啟用/停用的選單項目（由 on_app_state_changed 控制）──
@@ -424,6 +426,7 @@ struct TitlebarWidgets {
     load_embedded_item: gtk::MenuItem, // 載入內嵌標籤（有內嵌歌詞時才啟用）
     export_btn:      gtk::Button,      // 匯出主按鈕（有歌詞時才啟用）
     export_dropdown: gtk::MenuButton,  // 匯出下拉箭頭（有歌詞時才啟用）
+    export_menu:     gtk::Menu,        // 匯出選單（由 on_app_state_changed 動態重建）
 
     // ── 復原/重複：按鈕 + 下拉選單（由 on_history_changed 動態重建項目）──
     undo_btn:      gtk::Button,     // 復原主按鈕（圖示）
@@ -458,6 +461,8 @@ fn show_titlebar_buttons() -> Result<(), String> {
                     w.history_box.show_all();
                     w.export_box.show_all();
                     w.sep3.show();
+                    w.view_box.show_all();
+                    w.sep4.show();
                     w.subtitle_label.show();
                 }
             });
@@ -482,6 +487,7 @@ fn set_titlebar_buttons_enabled(enabled: bool) -> Result<(), String> {
                     w.lyrics_box.set_sensitive(enabled);
                     w.history_box.set_sensitive(enabled);
                     w.export_box.set_sensitive(enabled);
+                    w.view_box.set_sensitive(enabled);
                 }
             });
             gtk::glib::ControlFlow::Break
@@ -500,6 +506,7 @@ fn set_titlebar_buttons_enabled(enabled: bool) -> Result<(), String> {
 /// - can_load_embedded_lyrics：媒體的 tag 內是否有內嵌歌詞（控制「載入內嵌標籤」）
 #[tauri::command]
 fn on_app_state_changed(
+    window: tauri::WebviewWindow,
     audio_file_name: Option<String>,
     lyric_file_name: Option<String>,
     can_clear_media: bool,
@@ -528,6 +535,37 @@ fn on_app_state_changed(
                     // 匯出按鈕與下拉箭頭：只有在有歌詞時才能操作
                     w.export_btn.set_sensitive(can_clear_lyrics);
                     w.export_dropdown.set_sensitive(can_clear_lyrics);
+
+                    // 重建匯出選單
+                    for child in w.export_menu.children() { w.export_menu.remove(&child); }
+                    
+                    let webview_clone = window.clone();
+                    let append_item = |menu: &gtk::Menu, label: &str, js_cmd: &str| {
+                        let item = gtk::MenuItem::with_label(label);
+                        let wv = webview_clone.clone();
+                        let cmd = js_cmd.to_string();
+                        item.connect_activate(move |_| {
+                            let _ = wv.eval(&cmd);
+                        });
+                        menu.append(&item);
+                    };
+
+                    append_item(&w.export_menu, ".lrc 增強型LRC (ESLYRIC ﹣ 逐字同步)", "window.AppCommands && window.AppCommands.exportEnhanced && window.AppCommands.exportEnhanced()");
+                    append_item(&w.export_menu, ".lrc 標準LRC (逐行同步)", "window.AppCommands && window.AppCommands.exportStandard && window.AppCommands.exportStandard()");
+                    append_item(&w.export_menu, ".txt 簡易歌詞 (無時間戳)", "window.AppCommands && window.AppCommands.exportSimple && window.AppCommands.exportSimple()");
+
+                    if let Some(audio_name) = &audio_file_name {
+                        let ext = std::path::Path::new(audio_name).extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+                        if ext == "flac" || ext == "m4a" || ext == "mp4" {
+                            let sep = gtk::SeparatorMenuItem::new();
+                            w.export_menu.append(&sep);
+
+                            append_item(&w.export_menu, &format!(".{} 已嵌入歌詞的 增強型LRC (ESLYRIC ﹣ 逐字同步)", ext), "window.AppCommands && window.AppCommands.exportEmbeddedEnhanced && window.AppCommands.exportEmbeddedEnhanced()");
+                            append_item(&w.export_menu, &format!(".{} 已嵌入歌詞的 標準LRC (逐行同步)", ext), "window.AppCommands && window.AppCommands.exportEmbeddedStandard && window.AppCommands.exportEmbeddedStandard()");
+                            append_item(&w.export_menu, &format!(".{} 已嵌入歌詞的 簡易歌詞 (無時間戳)", ext), "window.AppCommands && window.AppCommands.exportEmbeddedSimple && window.AppCommands.exportEmbeddedSimple()");
+                        }
+                    }
+                    w.export_menu.show_all();
                 }
             });
             gtk::glib::ControlFlow::Break
@@ -535,6 +573,7 @@ fn on_app_state_changed(
     }
     #[cfg(not(target_os = "linux"))]
     {
+        let _ = window;
         // 非 Linux 平台無標題列，忽略所有參數避免 unused variable 警告
         let _ = audio_file_name;
         let _ = lyric_file_name;
@@ -853,11 +892,21 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             );
             lyrics_menu.append(&load_embedded_item);
 
+            // 項目 3：歌詞屬性
+            let lyrics_props_item = make_menu_item(
+                "歌詞屬性",
+                Some("text-editor-symbolic"),
+                false,
+                webview_window.clone(),
+                "window.AppCommands && window.AppCommands.showLrcMetadata && window.AppCommands.showLrcMetadata()",
+            );
+            lyrics_menu.append(&lyrics_props_item);
+
             // 水平分隔線，對應前端 <div className="h-px bg-[var(--app-border-base)]" />
             let lyrics_sep = gtk::SeparatorMenuItem::new();
             lyrics_menu.append(&lyrics_sep);
 
-            // 項目 3：清除目前已載入的歌詞
+            // 項目 4：清除目前已載入的歌詞
             // 對應 TopToolbar.tsx: <X className="w-3.5 h-3.5" /> + {i18n.clearLyrics}（紅色）
             // sensitive 由 on_app_state_changed 控制（有歌詞才啟用）
             let clear_lyrics_item = make_menu_item(
@@ -931,39 +980,16 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             export_box.style_context().add_class("linked");
 
             // 主按鈕：快速匯出目前格式
-            // 對應 TopToolbar.tsx: <Download className="w-4 h-4" /> + {i18n.exportLrc}
-            let export_btn = make_icon_button("匯出 .lrc", "document-save-symbolic");
+            // 對應 TopToolbar.tsx: <Download className="w-4 h-4" /> + 儲存
+            let export_btn = make_icon_button("儲存", "document-save-symbolic");
             let webview_clone = webview_window.clone();
             export_btn.connect_clicked(move |_| {
                 let _ = webview_clone.eval("window.AppCommands && window.AppCommands.exportCurrent && window.AppCommands.exportCurrent()");
             });
             export_box.pack_start(&export_btn, false, false, 0);
 
-            // 下拉選單：選擇不同的匯出格式
+            // 下拉選單：選擇不同的匯出格式 (內容由 on_app_state_changed 動態產生)
             let export_menu = gtk::Menu::new();
-
-            // 標準 LRC：每行一個時間戳，相容大多數播放器
-            // 對應 TopToolbar.tsx 下拉第一項：{i18n.exportStandard}
-            let export_standard_item = make_menu_item(
-                "標準 LRC (行同步)",
-                Some("document-save-symbolic"), // 與主按鈕圖示一致
-                false,
-                webview_window.clone(),
-                "window.AppCommands && window.AppCommands.exportStandard && window.AppCommands.exportStandard()",
-            );
-            export_menu.append(&export_standard_item);
-
-            // 逐字版 LRC：每個字詞獨立時間戳，供 ESLyric 等進階播放器使用
-            // 對應 TopToolbar.tsx 下拉第二項：{i18n.exportEnhanced}
-            let export_enhanced_item = make_menu_item(
-                "逐字版 LRC (ESLyric - 逐字同步)",
-                Some("document-save-as-symbolic"), // save-as 語意更接近「另存為其他格式」
-                false,
-                webview_window.clone(),
-                "window.AppCommands && window.AppCommands.exportEnhanced && window.AppCommands.exportEnhanced()",
-            );
-            export_menu.append(&export_enhanced_item);
-            export_menu.show_all();
 
             // MenuButton（倒三角箭頭）連結到匯出下拉選單
             let export_dropdown = gtk::MenuButton::new();
@@ -977,6 +1003,32 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             // Separator 3 (Right side)
             let sep3 = gtk::Separator::new(gtk::Orientation::Vertical);
             header_bar.pack_end(&sep3);
+
+            // 5. 視圖群組（深淺色、全螢幕）放在匯出左側
+            let view_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            view_box.style_context().add_class("linked");
+
+            let theme_btn = gtk::Button::from_icon_name(Some("weather-clear-night-symbolic"), gtk::IconSize::Button);
+            theme_btn.set_tooltip_text(Some("切換深淺色"));
+            let webview_clone = webview_window.clone();
+            theme_btn.connect_clicked(move |_| {
+                let _ = webview_clone.eval("window.AppCommands && window.AppCommands.toggleTheme && window.AppCommands.toggleTheme()");
+            });
+            view_box.pack_start(&theme_btn, false, false, 0);
+
+            let fullscreen_btn = gtk::Button::from_icon_name(Some("view-fullscreen-symbolic"), gtk::IconSize::Button);
+            fullscreen_btn.set_tooltip_text(Some("全螢幕"));
+            let webview_clone = webview_window.clone();
+            fullscreen_btn.connect_clicked(move |_| {
+                let _ = webview_clone.eval("window.AppCommands && window.AppCommands.toggleFullscreen && window.AppCommands.toggleFullscreen()");
+            });
+            view_box.pack_start(&fullscreen_btn, false, false, 0);
+
+            header_bar.pack_end(&view_box);
+
+            // Separator 4 (Right side, left of view box)
+            let sep4 = gtk::Separator::new(gtk::Orientation::Vertical);
+            header_bar.pack_end(&sep4);
 
             // Enable native window dragging & double-click to maximize on the entire title/subtitle area
             let gtk_window_clone = gtk_window.clone();
@@ -1005,6 +1057,8 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             history_box.set_visible(false);
             export_box.set_visible(false);
             sep3.set_visible(false);
+            view_box.set_visible(false);
+            sep4.set_visible(false);
 
             // Store widgets in thread-local for show_titlebar_buttons command
             TITLEBAR_WIDGETS.with(|widgets| {
@@ -1016,12 +1070,15 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
                     history_box,
                     export_box,
                     sep3,
+                    view_box,
+                    sep4,
                     subtitle_label,
                     clear_media_item,
                     clear_lyrics_item,
                     load_embedded_item,
                     export_btn,
                     export_dropdown,
+                    export_menu,
                     undo_btn,
                     redo_btn,
                     undo_dropdown,
@@ -1042,6 +1099,26 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
     }
 }
 
+#[tauri::command]
+fn set_gtk_theme(theme: String) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::prelude::*;
+        let is_dark = theme == "dark";
+        let _ = gtk::glib::idle_add_local(move || {
+            if let Some(settings) = gtk::Settings::default() {
+                settings.set_gtk_application_prefer_dark_theme(is_dark);
+            }
+            gtk::glib::ControlFlow::Break
+        });
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = theme;
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Start local media sync HTTP server
@@ -1050,7 +1127,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(GStreamerFixPlugin)
-        .invoke_handler(tauri::generate_handler![greet, read_file_binary, save_lyrics_dialog, show_titlebar_buttons, set_titlebar_buttons_enabled, on_app_state_changed, on_history_changed])
+        .invoke_handler(tauri::generate_handler![greet, read_file_binary, save_lyrics_dialog, show_titlebar_buttons, set_titlebar_buttons_enabled, on_app_state_changed, on_history_changed, set_gtk_theme])
         .setup(|app| {
             #[cfg(target_os = "linux")]
             {
