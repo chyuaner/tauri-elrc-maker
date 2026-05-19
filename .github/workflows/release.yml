@@ -1,0 +1,179 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '版本號 (例如 v1.0.0)，留空則使用 dev-{SHA}'
+        required: false
+        default: ''
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── Windows ────────────────────────────────────────────────────────
+          - platform: windows-latest
+            os_name: Windows
+            args: ''
+
+          # ── macOS (Apple Silicon + Intel Universal) ────────────────────────
+          - platform: macos-latest
+            os_name: macOS
+            args: '--target universal-apple-darwin'
+
+          # ── Linux (AppImage + deb) ─────────────────────────────────────────
+          - platform: ubuntu-22.04
+            os_name: Linux
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      # ────────────────────────────────────────────────────────────────────────
+      # 1. Checkout（含 submodule）
+      # ────────────────────────────────────────────────────────────────────────
+      - name: Checkout repository (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          # submodule 使用 HTTPS，GitHub Actions 可直接存取
+          # 若 submodule 為私有倉庫，請設定 SSH 金鑰或 PAT
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ────────────────────────────────────────────────────────────────────────
+      # 2. Linux 系統依賴
+      # ────────────────────────────────────────────────────────────────────────
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libglib2.0-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev
+
+      # ────────────────────────────────────────────────────────────────────────
+      # 3. macOS：安裝 Rust universal target
+      # ────────────────────────────────────────────────────────────────────────
+      - name: Add macOS Rust targets (universal binary)
+        if: matrix.platform == 'macos-latest'
+        run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      # ────────────────────────────────────────────────────────────────────────
+      # 4. 設定 Rust（含快取）
+      # ────────────────────────────────────────────────────────────────────────
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust / Cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      # ────────────────────────────────────────────────────────────────────────
+      # 5. 設定 Node.js
+      # ────────────────────────────────────────────────────────────────────────
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      # ────────────────────────────────────────────────────────────────────────
+      # 6. 安裝前端依賴（根目錄 + submodule）
+      # ────────────────────────────────────────────────────────────────────────
+      - name: Install root npm dependencies
+        run: npm ci
+
+      - name: Install submodule (aistudio-elrc-maker) npm dependencies
+        run: npm ci
+        working-directory: aistudio-elrc-maker
+
+      # ────────────────────────────────────────────────────────────────────────
+      # 7. 決定版本號（tag 觸發 or 手動輸入 or dev-SHA）
+      # ────────────────────────────────────────────────────────────────────────
+      - name: Determine release version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          elif [[ -n "${{ github.event.inputs.tag }}" ]]; then
+            VERSION="${{ github.event.inputs.tag }}"
+          else
+            VERSION="dev-$(git rev-parse --short HEAD)"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Release version: ${VERSION}"
+
+      # ────────────────────────────────────────────────────────────────────────
+      # 8. Tauri Build
+      # ────────────────────────────────────────────────────────────────────────
+      - name: Build Tauri application
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS 程式碼簽署（選用）：於 Secrets 設定後取消註解
+          # APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          # APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # APPLE_ID: ${{ secrets.APPLE_ID }}
+          # APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Linux AppImage 環境變數（避免 FUSE 問題）
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+          NO_STRIP: 'true'
+        with:
+          tagName: ${{ steps.version.outputs.version }}
+          releaseName: 'LRC Maker Enhanced ${{ steps.version.outputs.version }}'
+          releaseBody: |
+            ## LRC Maker Enhanced ${{ steps.version.outputs.version }}
+
+            ### 下載說明
+            | 平台 | 檔案 | 備註 |
+            |------|------|------|
+            | Windows | `*.msi` / `*.exe` | 建議使用 `.msi` |
+            | macOS | `*.dmg` | Universal Binary（支援 Intel & Apple Silicon）|
+            | Linux | `*.AppImage` / `*.deb` | AppImage 免安裝，deb 適用 Ubuntu/Debian |
+
+            ---
+            *由 GitHub Actions 自動建置*
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
+          # 使用根目錄的 package.json 的 build script 建置前端
+          beforeBuildCommand: 'npm run build'
+
+      # ────────────────────────────────────────────────────────────────────────
+      # 9. 上傳 artifacts（方便在非 Release 模式下下載）
+      # ────────────────────────────────────────────────────────────────────────
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-build-${{ matrix.os_name }}-${{ steps.version.outputs.version }}
+          path: |
+            src-tauri/target/release/bundle/**/*.msi
+            src-tauri/target/release/bundle/**/*.exe
+            src-tauri/target/release/bundle/**/*.dmg
+            src-tauri/target/release/bundle/**/*.AppImage
+            src-tauri/target/release/bundle/**/*.deb
+            src-tauri/target/universal-apple-darwin/release/bundle/**/*.dmg
+          if-no-files-found: warn
+          retention-days: 14
