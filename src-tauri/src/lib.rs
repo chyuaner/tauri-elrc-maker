@@ -763,6 +763,21 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             title_box.set_margin_top(0);
             title_box.set_margin_bottom(0);
             
+            // Horizontal box to contain properties button and title
+            let center_hbox = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            center_hbox.set_valign(gtk::Align::Center);
+            center_hbox.set_halign(gtk::Align::Center);
+            
+            let lyrics_props_btn = gtk::Button::from_icon_name(Some("text-editor-symbolic"), gtk::IconSize::Button);
+            lyrics_props_btn.set_tooltip_text(Some("歌詞屬性"));
+            lyrics_props_btn.set_relief(gtk::ReliefStyle::None);
+            
+            let webview_clone = webview_window.clone();
+            lyrics_props_btn.connect_clicked(move |_| {
+                let _ = webview_clone.eval("window.AppCommands && window.AppCommands.showLrcMetadata && window.AppCommands.showLrcMetadata()");
+            });
+            center_hbox.pack_start(&lyrics_props_btn, false, false, 0);
+            
             // Vertical box to stack Title and Subtitle
             let vbox = gtk::Box::new(gtk::Orientation::Vertical, 2);
             vbox.set_valign(gtk::Align::Center); // Centered vertically
@@ -805,7 +820,9 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             vbox.pack_start(&title_label, false, false, 0);
             vbox.pack_start(&subtitle_label, false, false, 0);
             
-            title_box.add(&vbox);
+            center_hbox.pack_start(&vbox, false, false, 0);
+            
+            title_box.add(&center_hbox);
             header_bar.set_custom_title(Some(&title_box));
 
             // ══════════════════════════════════════════════════
@@ -891,16 +908,6 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
                 "window.AppCommands && window.AppCommands.loadEmbeddedLyrics && window.AppCommands.loadEmbeddedLyrics()",
             );
             lyrics_menu.append(&load_embedded_item);
-
-            // 項目 3：歌詞屬性
-            let lyrics_props_item = make_menu_item(
-                "歌詞屬性",
-                Some("text-editor-symbolic"),
-                false,
-                webview_window.clone(),
-                "window.AppCommands && window.AppCommands.showLrcMetadata && window.AppCommands.showLrcMetadata()",
-            );
-            lyrics_menu.append(&lyrics_props_item);
 
             // 水平分隔線，對應前端 <div className="h-px bg-[var(--app-border-base)]" />
             let lyrics_sep = gtk::SeparatorMenuItem::new();
@@ -1007,14 +1014,6 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             // 5. 視圖群組（深淺色、全螢幕）放在匯出左側
             let view_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
             view_box.style_context().add_class("linked");
-
-            let theme_btn = gtk::Button::from_icon_name(Some("weather-clear-night-symbolic"), gtk::IconSize::Button);
-            theme_btn.set_tooltip_text(Some("切換深淺色"));
-            let webview_clone = webview_window.clone();
-            theme_btn.connect_clicked(move |_| {
-                let _ = webview_clone.eval("window.AppCommands && window.AppCommands.toggleTheme && window.AppCommands.toggleTheme()");
-            });
-            view_box.pack_start(&theme_btn, false, false, 0);
 
             let fullscreen_btn = gtk::Button::from_icon_name(Some("view-fullscreen-symbolic"), gtk::IconSize::Button);
             fullscreen_btn.set_tooltip_text(Some("全螢幕"));
