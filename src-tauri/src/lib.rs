@@ -370,7 +370,7 @@ struct TitlebarWidgets {
     export_box: gtk::Box,
     sep3: gtk::Separator,
     subtitle_label: gtk::Label,
-    
+
     clear_media_item: gtk::MenuItem,
     clear_lyrics_item: gtk::MenuItem,
     load_embedded_item: gtk::MenuItem,
@@ -650,6 +650,7 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
 
             let media_dropdown = gtk::MenuButton::new();
             media_dropdown.set_popup(Some(&media_menu));
+            media_dropdown.set_tooltip_text(Some("媒體選項"));
             media_box.pack_start(&media_dropdown, false, false, 0);
 
             header_bar.pack_start(&media_box);
@@ -669,16 +670,30 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             });
             lyrics_box.pack_start(&load_lyrics_btn, false, false, 0);
 
-            // Create lyrics dropdown menu
+            // Create lyrics dropdown menu (aligned with TopToolbar.tsx order)
             let lyrics_menu = gtk::Menu::new();
-            
-            let load_embedded_item = gtk::MenuItem::with_label("載入內嵌");
+
+            // 1. 載入歌詞檔案
+            let load_lyrics_menu_item = gtk::MenuItem::with_label("載入歌詞檔案");
+            let webview_clone = webview_window.clone();
+            load_lyrics_menu_item.connect_activate(move |_| {
+                let _ = webview_clone.eval("window.AppCommands && window.AppCommands.loadLyrics && window.AppCommands.loadLyrics()");
+            });
+            lyrics_menu.append(&load_lyrics_menu_item);
+
+            // 2. 載入內嵌標籤
+            let load_embedded_item = gtk::MenuItem::with_label("載入內嵌標籤");
             let webview_clone = webview_window.clone();
             load_embedded_item.connect_activate(move |_| {
                 let _ = webview_clone.eval("window.AppCommands && window.AppCommands.loadEmbeddedLyrics && window.AppCommands.loadEmbeddedLyrics()");
             });
             lyrics_menu.append(&load_embedded_item);
 
+            // 3. 分隔線
+            let lyrics_sep = gtk::SeparatorMenuItem::new();
+            lyrics_menu.append(&lyrics_sep);
+
+            // 4. 清除歌詞
             let clear_lyrics_item = gtk::MenuItem::with_label("清除歌詞");
             let webview_clone = webview_window.clone();
             clear_lyrics_item.connect_activate(move |_| {
@@ -689,6 +704,7 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
 
             let lyrics_dropdown = gtk::MenuButton::new();
             lyrics_dropdown.set_popup(Some(&lyrics_menu));
+            lyrics_dropdown.set_tooltip_text(Some("歌詞選項"));
             lyrics_box.pack_start(&lyrics_dropdown, false, false, 0);
 
             header_bar.pack_start(&lyrics_box);
@@ -750,17 +766,19 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
             });
             export_box.pack_start(&export_btn, false, false, 0);
 
-            // Create export dropdown menu
+            // Create export dropdown menu (aligned with TopToolbar.tsx)
             let export_menu = gtk::Menu::new();
 
-            let export_standard_item = gtk::MenuItem::with_label("標準匯出");
+            // 標準匯出 (.lrc)
+            let export_standard_item = gtk::MenuItem::with_label("標準 LRC (行同步)");
             let webview_clone = webview_window.clone();
             export_standard_item.connect_activate(move |_| {
                 let _ = webview_clone.eval("window.AppCommands && window.AppCommands.exportStandard && window.AppCommands.exportStandard()");
             });
             export_menu.append(&export_standard_item);
 
-            let export_enhanced_item = gtk::MenuItem::with_label("加強匯出");
+            // 加強匯出 (.elrc)
+            let export_enhanced_item = gtk::MenuItem::with_label("逐字版 LRC (ESLyric - 逐字同步)");
             let webview_clone = webview_window.clone();
             export_enhanced_item.connect_activate(move |_| {
                 let _ = webview_clone.eval("window.AppCommands && window.AppCommands.exportEnhanced && window.AppCommands.exportEnhanced()");
@@ -770,6 +788,7 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
 
             let export_dropdown = gtk::MenuButton::new();
             export_dropdown.set_popup(Some(&export_menu));
+            export_dropdown.set_tooltip_text(Some("匯出選項"));
             export_box.pack_start(&export_dropdown, false, false, 0);
 
             header_bar.pack_end(&export_box);
