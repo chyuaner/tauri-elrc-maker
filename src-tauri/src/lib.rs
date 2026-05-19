@@ -1121,6 +1121,58 @@ fn setup_linux_titlebar(app: &mut tauri::App) {
                 gtk::glib::Propagation::Proceed
             });
 
+            // ══════════════════════════════════════════════════════════════════
+            // [LINUX FULLSCREEN WORKAROUND] GTK window-state-event 全螢幕偵測
+            // ══════════════════════════════════════════════════════════════════
+            // 問題：進入全螢幕時，GTK HeaderBar 會被 Wayland/X11 完全隱藏，
+            //       導致所有工具列按鈕消失，使用者無法操作任何功能。
+            //
+            // 解法：監聽 GTK 的 window-state-event，當偵測到 FULLSCREEN flag 改變時，
+            //       直接透過 eval 注入 JS，更新 --top-toolbar-display CSS variable：
+            //       - 進入全螢幕：設為 'flex' → web TopToolbar 浮現在內容頂部
+            //       - 離開全螢幕：設為 'none' → GTK HeaderBar 重新接管，隱藏 web Toolbar
+            //
+            // 注意：這個機制與前端 WebSystemIntegration.tsx 的 tauri://resize 監聽
+            //       互為補充。Rust 端的 GTK 事件更即時（無非同步輪詢延遲），
+            //       前端的 isFullscreen() 查詢作為額外保障。
+            let webview_clone = webview_window.clone();
+            let fullscreen_btn_clone = fullscreen_btn.clone();
+            gtk_window.connect_window_state_event(move |_win, event| {
+                use gtk::prelude::*;
+                let changed = event.changed_mask();
+                let new_state = event.new_window_state();
+
+                // 只在 FULLSCREEN flag 發生變化時處理
+                if changed.contains(gtk::gdk::WindowState::FULLSCREEN) {
+                    let is_fullscreen = new_state.contains(gtk::gdk::WindowState::FULLSCREEN);
+
+                    if is_fullscreen {
+                        // 進入全螢幕：GTK HeaderBar 消失 → 恢復 web TopToolbar
+                        let _ = webview_clone.eval(
+                            "document.documentElement.style.setProperty('--top-toolbar-display', 'flex');"
+                        );
+                        // 更新按鈕圖示為「退出全螢幕」
+                        fullscreen_btn_clone.set_image(Some(&gtk::Image::from_icon_name(
+                            Some("view-restore-symbolic"),
+                            gtk::IconSize::Button,
+                        )));
+                        fullscreen_btn_clone.set_tooltip_text(Some("退出全螢幕"));
+                    } else {
+                        // 離開全螢幕：GTK HeaderBar 恢復 → 隱藏 web TopToolbar
+                        let _ = webview_clone.eval(
+                            "document.documentElement.style.setProperty('--top-toolbar-display', 'none');"
+                        );
+                        // 恢復按鈕圖示為「進入全螢幕」
+                        fullscreen_btn_clone.set_image(Some(&gtk::Image::from_icon_name(
+                            Some("view-fullscreen-symbolic"),
+                            gtk::IconSize::Button,
+                        )));
+                        fullscreen_btn_clone.set_tooltip_text(Some("全螢幕"));
+                    }
+                }
+                gtk::glib::Propagation::Proceed
+            });
+
             // Set initial visibility of all buttons to false
             media_box.set_visible(false);
             sep1.set_visible(false);
