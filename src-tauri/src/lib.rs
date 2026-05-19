@@ -403,6 +403,76 @@ fn save_lyrics_dialog(window: tauri::WebviewWindow, lyrics_text: String, default
     }
 }
 
+/// [Tauri command] 接收前端已處理完成的二進位媒體檔案（嵌入歌詞後），
+/// 顯示原生「另存新檔」對話框讓使用者選擇儲存位置，並直接寫入磁碟。
+///
+/// 適用於「已嵌入歌詞的媒體匯出」流程：
+/// 前端負責在 JS 端（flac-utils / m4a-utils）將歌詞寫入媒體 tag，
+/// 產生完整的 Uint8Array 後呼叫此 command，由 Rust 顯示原生儲存對話框。
+#[tauri::command]
+fn save_binary_dialog(window: tauri::WebviewWindow, bytes: Vec<u8>, default_name: String) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::prelude::*;
+        if let Ok(gtk_window) = window.gtk_window() {
+            // 判斷副檔名，設定對應的檔案篩選器
+            let ext = std::path::Path::new(&default_name)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            
+            let dialog_title = match ext.as_str() {
+                "flac" => "儲存 FLAC 音訊檔案",
+                "m4a"  => "儲存 M4A 音訊檔案",
+                "mp4"  => "儲存 MP4 影音檔案",
+                _      => "儲存媒體檔案",
+            };
+            
+            let file_chooser = gtk::FileChooserDialog::new(
+                Some(dialog_title),
+                Some(&gtk_window),
+                gtk::FileChooserAction::Save,
+            );
+            file_chooser.add_button("取消", gtk::ResponseType::Cancel);
+            file_chooser.add_button("儲存", gtk::ResponseType::Accept);
+            file_chooser.set_do_overwrite_confirmation(true);
+            file_chooser.set_current_name(&default_name);
+
+            // 根據副檔名設定 MIME 篩選器
+            let filter = gtk::FileFilter::new();
+            match ext.as_str() {
+                "flac" => { filter.add_mime_type("audio/flac"); filter.set_name(Some("FLAC 音訊 (*.flac)")); }
+                "m4a"  => { filter.add_mime_type("audio/mp4");  filter.set_name(Some("M4A 音訊 (*.m4a)")); }
+                "mp4"  => { filter.add_mime_type("video/mp4");  filter.set_name(Some("MP4 影音 (*.mp4)")); }
+                _      => { filter.add_pattern("*"); filter.set_name(Some("所有檔案")); }
+            }
+            file_chooser.add_filter(filter);
+
+            let response = file_chooser.run();
+            if response == gtk::ResponseType::Accept {
+                if let Some(save_path) = file_chooser.filename() {
+                    file_chooser.close();
+                    return std::fs::write(&save_path, &bytes)
+                        .map_err(|e| format!("寫入檔案失敗：{}", e));
+                }
+            }
+            file_chooser.close();
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        // Windows / macOS：尚未實作原生對話框（未來可用 rfd crate 擴充）
+        // 暫時寫入目前工作目錄作為 fallback，避免引入額外 crate 依賴
+        let save_path = std::path::PathBuf::from(&default_name);
+        std::fs::write(&save_path, &bytes)
+            .map_err(|e| format!("寫入檔案失敗：{}", e))?;
+        let _ = window;
+        Ok(())
+    }
+}
+
 /// 儲存所有需要在執行期動態控制的 GTK 標題列 widget 參照。
 /// 因為 GTK 必須在主執行緒操作，所以使用 thread_local! 包裝。
 /// 前端呼叫 Tauri command 後，透過 idle_add_local 回到 GTK 主執行緒讀取此結構體。
@@ -1135,7 +1205,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(GStreamerFixPlugin)
-        .invoke_handler(tauri::generate_handler![greet, read_file_binary, save_lyrics_dialog, show_titlebar_buttons, set_titlebar_buttons_enabled, on_app_state_changed, on_history_changed, set_gtk_theme])
+        .invoke_handler(tauri::generate_handler![greet, read_file_binary, save_lyrics_dialog, save_binary_dialog, show_titlebar_buttons, set_titlebar_buttons_enabled, on_app_state_changed, on_history_changed, set_gtk_theme])
         .setup(|app| {
             #[cfg(target_os = "linux")]
             {
